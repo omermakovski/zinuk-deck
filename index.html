@@ -122,18 +122,21 @@ td.sent .he{font-family:var(--f-he);font-size:13px;text-align:right}
 .endbox{background:var(--paper);border-radius:16px;padding:26px;text-align:center;box-shadow:var(--shadow);display:grid;gap:12px;justify-items:center;width:100%;max-width:560px}
 
 /* fill in */
-.bank{display:flex;flex-wrap:wrap;gap:8px;background:var(--paper);border:1px dashed var(--line);border-radius:12px;padding:12px}
-.chip{border:1px solid var(--line);border-radius:99px;padding:4px 12px;background:var(--bg);font-weight:500;font-size:14px}
-.chip.used{opacity:.4;text-decoration:line-through}
 .qs{display:grid;gap:12px;margin-top:14px;counter-reset:q}
 .q{background:var(--paper);border-radius:12px;padding:14px 16px;border:1px solid var(--line);display:grid;gap:6px}
 .q .s{font-family:var(--f-read);font-size:16px;line-height:1.75}
 .q .s::before{counter-increment:q;content:counter(q) ". ";font-family:var(--f-ui);color:var(--muted);font-weight:500}
-.q input{font:inherit;font-family:var(--f-ui);font-size:15px;border:0;border-bottom:2px solid var(--pen);background:var(--pen-soft);color:var(--ink);border-radius:6px 6px 0 0;padding:1px 8px;width:9.5em;max-width:60vw}
+.q .blank{display:inline-block;min-width:5.5em;border-bottom:2px solid var(--pen);background:var(--pen-soft);border-radius:6px 6px 0 0;padding:0 8px;font-family:var(--f-ui);font-size:15px;text-align:center}
+.q.ok .blank{border-color:var(--know);background:var(--know-soft)}
+.q.no .blank{border-color:var(--bad);background:var(--bad-soft)}
+.mc{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.opt{border:1px solid var(--line);border-radius:10px;padding:9px 12px;background:var(--bg);color:var(--ink);font:inherit;font-weight:500;font-size:15px;text-align:start;cursor:pointer}
+.opt:hover:not(:disabled){border-color:var(--pen)}
+.opt:disabled{cursor:default;opacity:.55}
+.opt.right{opacity:1;border-color:var(--know);background:var(--know-soft);color:var(--know);font-weight:700}
+.opt.wrong{opacity:1;border-color:var(--bad);background:var(--bad-soft)}
 .q.ok{border-color:var(--know);background:linear-gradient(var(--know-soft),var(--know-soft)) left/4px 100% no-repeat,var(--paper)}
-.q.ok input{border-color:var(--know);background:var(--know-soft)}
 .q.no{border-color:var(--bad)}
-.q.no input{border-color:var(--bad);background:var(--bad-soft)}
 .q .fb{font-size:13px}
 .q .fb .ans{color:var(--know);font-weight:700}
 .score{font-family:var(--f-display);font-size:22px;font-weight:800}

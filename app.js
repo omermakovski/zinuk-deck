@@ -166,7 +166,7 @@
       <div style="margin-top:10px" class="row"><div><div class="eyebrow">Group ${g.id} of ${V.groups.length} · ${st.k}/${st.n} known</div>
         <h1>${esc(g.title)}</h1><div class="he he-left muted" style="font-size:17px">${esc(g.titleHe)}</div></div></div>
       <div class="tabs" role="tablist">
-        ${[['cards', 'Flashcards'], ['fill', 'Fill in the blanks'], ['texts', 'Reading texts'], ['list', 'Word list']].map(([k, l]) => `<button role="tab" data-tab="${k}" class="${tab === k ? 'on' : ''}" aria-selected="${tab === k}">${l}</button>`).join('')}
+        ${[['cards', 'Flashcards'], ['fill', 'Complete the sentence'], ['texts', 'Reading texts'], ['list', 'Word list']].map(([k, l]) => `<button role="tab" data-tab="${k}" class="${tab === k ? 'on' : ''}" aria-selected="${tab === k}">${l}</button>`).join('')}
       </div>
       <section id="pane"></section>`;
     app.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; deck = null; renderGroup(); });
@@ -252,38 +252,43 @@
   function renderFill(pane, g) {
     const ex = g.exercises || [];
     if (!ex.length) { pane.innerHTML = '<div class="empty">The exercise for this group is still being written.</div>'; return; }
-    const bank = shuffle(ex.map(e => e.base));
-    pane.innerHTML = `<p class="muted">Type the right word into each sentence. You may need to change its form (for example <i>acquire → acquired</i>). Click a word in the bank to fill the box you're on.</p>
-      <div class="bank" id="bank">${bank.map(b => `<button class="chip" data-w="${esc(b)}">${esc(b)}</button>`).join('')}</div>
-      <div class="qs">${ex.map((e, i) => {
-        const parts = esc(e.sentence).split('____');
-        return `<div class="q" id="q${i}"><div class="s">${parts[0]}<input id="in${i}" data-i="${i}" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Blank ${i + 1}">${parts.slice(1).join('____')}</div><div class="fb" id="fb${i}" hidden></div></div>`;
-      }).join('')}</div>
-      <div class="row" style="margin-top:16px"><button class="btn primary" id="check">Check answers</button><button class="btn" id="reset">Start over</button><span class="spacer"></span><span class="score" id="score"></span></div>`;
-    let last = null;
-    pane.querySelectorAll('.q input').forEach(inp => { inp.onfocus = () => last = inp; inp.oninput = markBank; });
-    pane.querySelectorAll('.chip').forEach(c => c.onclick = () => {
-      const target = last || [...pane.querySelectorAll('.q input')].find(x => !x.value);
-      if (target) { target.value = c.dataset.w; markBank(); const next = [...pane.querySelectorAll('.q input')].find(x => !x.value); (next || target).focus(); }
+    // 4 choices per sentence: the answer + 3 other answers from this group's sentences (already in a fitting form),
+    // topped up with other words of the group when there are not enough.
+    const pool = [...new Map([...ex.map(e => e.answer), ...g.words.map(w => w.w)].map(a => [norm(a), a])).values()];
+    const qs = ex.map(e => {
+      const wrong = shuffle(pool.filter(a => norm(a) !== norm(e.answer) && norm(a) !== norm(e.base)));
+      const fromEx = wrong.filter(a => ex.some(o => norm(o.answer) === norm(a)));
+      const rest = wrong.filter(a => !fromEx.includes(a));
+      return { e, opts: shuffle([e.answer, ...[...fromEx, ...rest].slice(0, 3)]) };
     });
-    function markBank() {
-      const used = new Set([...pane.querySelectorAll('.q input')].map(x => norm(x.value)));
-      pane.querySelectorAll('.chip').forEach(c => c.classList.toggle('used', used.has(norm(c.dataset.w))));
-    }
-    $('#check').onclick = () => {
-      let score = 0;
-      ex.forEach((e, i) => {
-        const v = norm($('#in' + i).value), ok = v && (v === norm(e.answer));
-        const close = !ok && v && v === norm(e.base);
-        if (ok) score++;
-        const q = $('#q' + i); q.classList.toggle('ok', !!ok); q.classList.toggle('no', !ok);
-        const fb = $('#fb' + i); fb.hidden = false;
-        fb.innerHTML = (ok ? '' : `Answer: <span class="ans">${esc(e.answer)}</span>${close ? ' (right word, wrong form)' : ''} · `) + `<span class="he">${esc(e.he)}</span>`;
-        if (!ok) { const c = g.words.find(x => keyOf(x.w) === keyOf(e.base)); if (c) setStatus(c.k, 'l'); }
+    pane.innerHTML = `<p class="muted">Choose the word that completes each sentence.</p>
+      <div class="qs">${qs.map(({ e, opts }, i) => {
+        const parts = esc(e.sentence).split('____');
+        return `<div class="q" id="q${i}"><div class="s">${parts[0]}<span class="blank" id="bl${i}">&nbsp;</span>${parts.slice(1).join('____')}</div>
+          <div class="mc">${opts.map(o => `<button class="opt" data-i="${i}" data-a="${esc(o)}">${esc(o)}</button>`).join('')}</div>
+          <div class="fb" id="fb${i}" hidden></div></div>`;
+      }).join('')}</div>
+      <div class="row" style="margin-top:16px"><button class="btn" id="reset">Start over</button><span class="spacer"></span><span class="score" id="score">0 / ${ex.length} answered</span></div>`;
+    let answered = 0, score = 0;
+    pane.querySelectorAll('.opt').forEach(b => b.onclick = () => {
+      const i = +b.dataset.i, e = ex[i], q = $('#q' + i);
+      if (q.classList.contains('ok') || q.classList.contains('no')) return;
+      const ok = norm(b.dataset.a) === norm(e.answer);
+      answered++; if (ok) score++;
+      q.classList.add(ok ? 'ok' : 'no');
+      q.querySelectorAll('.opt').forEach(o => {
+        o.disabled = true;
+        if (norm(o.dataset.a) === norm(e.answer)) o.classList.add('right');
+        else if (o === b) o.classList.add('wrong');
       });
+      $('#bl' + i).textContent = e.answer;
+      const fb = $('#fb' + i); fb.hidden = false;
+      fb.innerHTML = (ok ? '' : `Answer: <span class="ans">${esc(e.answer)}</span> · `) + `<span class="he">${esc(e.he)}</span>`;
+      if (!ok) { const c = g.words.find(x => keyOf(x.w) === keyOf(e.base)); if (c) setStatus(c.k, 'l'); }
+      if (answered < ex.length) { $('#score').textContent = `${answered} / ${ex.length} answered`; return; }
       $('#score').textContent = `${score} / ${ex.length}`;
       if (state.ex[g.id] == null || score > state.ex[g.id]) { state.ex[g.id] = score; persist(); }
-    };
+    });
     $('#reset').onclick = () => renderFill(pane, g);
   }
 
