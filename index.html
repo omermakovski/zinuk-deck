@@ -102,6 +102,9 @@ button{font:inherit;color:inherit;cursor:pointer}
 .face{position:absolute;inset:0;backface-visibility:hidden;background:var(--paper);border-radius:18px;box-shadow:var(--shadow);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:22px;gap:10px;overflow:auto;
   background-image:linear-gradient(90deg,transparent 38px,color-mix(in srgb,var(--bad) 30%,transparent) 38px 39px,transparent 39px),linear-gradient(var(--paper) 40px,transparent 40px),repeating-linear-gradient(var(--paper) 0 31px,color-mix(in srgb,var(--line) 55%,transparent) 31px 32px)}
 .face.back{transform:rotateY(180deg)}
+.cardwrap{position:relative;width:100%;max-width:560px}
+.say{position:absolute;top:12px;right:12px;z-index:2;width:44px;height:44px;border-radius:99px;border:1px solid var(--line);background:var(--paper);color:var(--pen);display:grid;place-items:center;padding:0;box-shadow:var(--shadow)}
+.say:hover{border-color:var(--pen);background:var(--pen-soft)}
 .face .word{font-family:var(--f-display);font-size:clamp(30px,7vw,46px);font-weight:700;text-align:center}
 .face .mean{font-family:var(--f-he);font-size:clamp(20px,4.6vw,27px);font-weight:500;text-align:center;direction:rtl}
 .face .daily{background:var(--pen-soft);border-radius:12px;padding:10px 14px;display:grid;gap:4px;max-width:46ch;text-align:center}
@@ -132,7 +135,10 @@ td.sent .he{font-family:var(--f-he);font-size:13px;text-align:right}
 .mc{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .opt{border:1px solid var(--line);border-radius:10px;padding:9px 12px;background:var(--bg);color:var(--ink);font:inherit;font-weight:500;font-size:15px;text-align:start;cursor:pointer}
 .opt:hover:not(:disabled){border-color:var(--pen)}
-.opt:disabled{cursor:default;opacity:.55}
+.opt:disabled{cursor:default;opacity:.85}
+.opt{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:2px 10px}
+.opt .ohe{font-weight:500;font-size:14px;color:var(--ink);text-align:right;margin-inline-start:auto}
+.opt.right .ohe{color:var(--know)}
 .opt.right{opacity:1;border-color:var(--know);background:var(--know-soft);color:var(--know);font-weight:700}
 .opt.wrong{opacity:1;border-color:var(--bad);background:var(--bad-soft)}
 .q.ok{border-color:var(--know);background:linear-gradient(var(--know-soft),var(--know-soft)) left/4px 100% no-repeat,var(--paper)}

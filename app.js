@@ -182,6 +182,26 @@
   const savePrefs = () => { try { localStorage.setItem(LS + '-prefs', JSON.stringify(prefs)); } catch (e) { } };
   if (prefs.onlyLearning == null) prefs.onlyLearning = true;
 
+  // ---------- pronunciation (browser text-to-speech) ----------
+  const CAN_SPEAK = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+  let enVoice = null;
+  function pickVoice() {
+    if (!CAN_SPEAK) return;
+    const vs = speechSynthesis.getVoices().filter(v => /^en[-_]/i.test(v.lang));
+    enVoice = vs.find(v => /en[-_]US/i.test(v.lang) && /natural|google|samantha|aria|jenny/i.test(v.name)) ||
+      vs.find(v => /en[-_]US/i.test(v.lang)) || vs[0] || null;
+  }
+  if (CAN_SPEAK) { pickVoice(); try { speechSynthesis.addEventListener('voiceschanged', pickVoice); } catch (e) { } }
+  function speak(text) {
+    if (!CAN_SPEAK) return;
+    try {
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(String(text).replace(/\(.*?\)/g, '').trim());
+      u.lang = enVoice ? enVoice.lang : 'en-US'; if (enVoice) u.voice = enVoice; u.rate = 0.9;
+      speechSynthesis.speak(u);
+    } catch (e) { }
+  }
+
   function buildDeck(keys, id) {
     let list = prefs.onlyLearning ? keys.filter(k => status(k) !== 'k') : keys.slice();
     if (prefs.shuffle) list = shuffle(list);
@@ -220,17 +240,21 @@
       ${w.note ? `<div class="note">${esc(w.note)}</div>` : ''}`;
     pane.innerHTML = `<div class="deck">
       <div class="counter">Card ${d.i + 1} of ${d.list.length} · ${pill(k)}</div>
+      <div class="cardwrap">
       <button class="card${d.flip ? ' flip' : ''}" id="card" aria-label="Flip card">
         <div class="inner"><div class="face">${prefs.reverse ? meaning : front}<div class="kbd">Tap to flip</div></div>
         <div class="face back">${back}</div></div>
       </button>
+      ${CAN_SPEAK ? `<button class="say" id="say" type="button" aria-label="Hear the word" title="Hear the word (S)"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>` : ''}
+      </div>
       <div class="row" style="justify-content:center">
         <button class="btn learn" id="bL">Still learning</button>
         <button class="btn know" id="bK">I know it</button>
       </div>
-      <div class="kbd">Keyboard: Space flips · ← still learning · → I know it</div>
+      <div class="kbd">Keyboard: Space flips · ← still learning · → I know it${CAN_SPEAK ? ' · S hears the word' : ''}</div>
       ${opts}</div>`;
     $('#card').onclick = () => { d.flip = !d.flip; $('#card').classList.toggle('flip', d.flip); };
+    const say = $('#say'); if (say) say.onclick = ev => { ev.stopPropagation(); speak(w.w); };
     $('#bK').onclick = () => answer('k');
     $('#bL').onclick = () => answer('l');
     function answer(v) { setStatus(k, v); d[v]++; d.i++; d.flip = false; renderDeck(pane, keys, id); }
@@ -245,6 +269,7 @@
     if (e.key === ' ') { e.preventDefault(); $('#card').click(); }
     else if (e.key === 'ArrowRight') $('#bK').click();
     else if (e.key === 'ArrowLeft') $('#bL').click();
+    else if ((e.key === 's' || e.key === 'S') && $('#say')) $('#say').click();
   });
 
   // ---------- fill in ----------
@@ -261,11 +286,17 @@
       const rest = wrong.filter(a => !fromEx.includes(a));
       return { e, opts: shuffle([e.answer, ...[...fromEx, ...rest].slice(0, 3)]) };
     });
+    // Hebrew meaning for every option: an inflected answer ("mitigated") maps to its base word's card(s).
+    const heOf = {};
+    const senses = base => g.words.filter(x => keyOf(x.w) === keyOf(base)).map(x => x.he).filter(Boolean);
+    g.words.forEach(w => { const n = norm(w.w); if (!heOf[n]) heOf[n] = senses(w.w).join(' / '); });
+    ex.forEach(e => { const n = norm(e.answer); if (!heOf[n]) heOf[n] = senses(e.base).join(' / '); });
+    const optHe = o => heOf[norm(o)] || '';
     pane.innerHTML = `<p class="muted">Choose the word that completes each sentence.</p>
       <div class="qs">${qs.map(({ e, opts }, i) => {
         const parts = esc(e.sentence).split('____');
         return `<div class="q" id="q${i}"><div class="s">${parts[0]}<span class="blank" id="bl${i}">&nbsp;</span>${parts.slice(1).join('____')}</div>
-          <div class="mc">${opts.map(o => `<button class="opt" data-i="${i}" data-a="${esc(o)}">${esc(o)}</button>`).join('')}</div>
+          <div class="mc">${opts.map(o => `<button class="opt" data-i="${i}" data-a="${esc(o)}"><span class="ow">${esc(o)}</span>${optHe(o) ? `<span class="ohe he" hidden>${esc(optHe(o))}</span>` : ''}</button>`).join('')}</div>
           <div class="fb" id="fb${i}" hidden></div></div>`;
       }).join('')}</div>
       <div class="row" style="margin-top:16px"><button class="btn" id="reset">Start over</button><span class="spacer"></span><span class="score" id="score">0 / ${ex.length} answered</span></div>`;
@@ -278,6 +309,7 @@
       q.classList.add(ok ? 'ok' : 'no');
       q.querySelectorAll('.opt').forEach(o => {
         o.disabled = true;
+        const h = o.querySelector('.ohe'); if (h) h.hidden = false;
         if (norm(o.dataset.a) === norm(e.answer)) o.classList.add('right');
         else if (o === b) o.classList.add('wrong');
       });
