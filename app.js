@@ -184,20 +184,34 @@
 
   // ---------- pronunciation (browser text-to-speech) ----------
   const CAN_SPEAK = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
-  let enVoice = null;
-  function pickVoice() {
+  // Clearest voices first: neural/"Natural"/enhanced voices, then Google's, then well-known good system voices.
+  const voiceScore = v => {
+    let s = /en[-_]US/i.test(v.lang) ? 3 : /en[-_]GB/i.test(v.lang) ? 2 : 1;
+    if (/natural|neural|premium|enhanced/i.test(v.name)) s += 20;
+    if (/online/i.test(v.name)) s += 8;
+    if (/google/i.test(v.name)) s += 10;
+    if (/samantha|ava|allison|aria|jenny|guy|emma|andrew|brian|serena|daniel|karen|moira/i.test(v.name)) s += 5;
+    if (/david|mark|zira|fred|albert|bad news|bells|boing|bubbles|cellos|jester|organ|trinoids|whisper|zarvox|superstar|wobble|junior|ralph|kathy|grandma|grandpa|rocko|shelley|sandy|eddy|flo|reed/i.test(v.name)) s -= 6;
+    return s;
+  };
+  let VOICES = [];
+  const loadVoices = () => {
     if (!CAN_SPEAK) return;
-    const vs = speechSynthesis.getVoices().filter(v => /^en[-_]/i.test(v.lang));
-    enVoice = vs.find(v => /en[-_]US/i.test(v.lang) && /natural|google|samantha|aria|jenny/i.test(v.name)) ||
-      vs.find(v => /en[-_]US/i.test(v.lang)) || vs[0] || null;
-  }
-  if (CAN_SPEAK) { pickVoice(); try { speechSynthesis.addEventListener('voiceschanged', pickVoice); } catch (e) { } }
+    VOICES = speechSynthesis.getVoices().filter(v => /^en([-_]|$)/i.test(v.lang)).sort((a, b) => voiceScore(b) - voiceScore(a));
+    const sel = $('#optVoice'); if (sel) sel.innerHTML = voiceOptions();
+  };
+  const voiceLabel = v => v.name.replace(/^(Microsoft|Google|Apple)\s+/, '').replace(/\s*-\s*English.*$/, '').replace(/\s*\(.*?\)\s*$/, '') + (/natural|neural|premium|enhanced/i.test(v.name) ? ' (natural)' : '') + ' · ' + v.lang.replace('_', '-');
+  const voiceOptions = () => `<option value="">Best available${VOICES[0] ? ' (' + esc(voiceLabel(VOICES[0])) + ')' : ''}</option>` +
+    VOICES.map(v => `<option value="${esc(v.name)}" ${prefs.voice === v.name ? 'selected' : ''}>${esc(voiceLabel(v))}</option>`).join('');
+  if (CAN_SPEAK) { loadVoices(); try { speechSynthesis.addEventListener('voiceschanged', loadVoices); } catch (e) { } }
   function speak(text) {
     if (!CAN_SPEAK) return;
     try {
       speechSynthesis.cancel();
+      const v = VOICES.find(x => x.name === prefs.voice) || VOICES[0] || null;
       const u = new SpeechSynthesisUtterance(String(text).replace(/\(.*?\)/g, '').trim());
-      u.lang = enVoice ? enVoice.lang : 'en-US'; if (enVoice) u.voice = enVoice; u.rate = 0.9;
+      u.lang = v ? v.lang : 'en-US'; if (v) u.voice = v;
+      u.rate = prefs.slow ? 0.6 : 0.85;
       speechSynthesis.speak(u);
     } catch (e) { }
   }
@@ -215,7 +229,10 @@
         <label><input type="checkbox" id="optOnly" ${prefs.onlyLearning ? 'checked' : ''}> Only words I'm still learning</label>
         <label><input type="checkbox" id="optShuffle" ${prefs.shuffle ? 'checked' : ''}> Shuffle</label>
         <label><input type="checkbox" id="optRev" ${prefs.reverse ? 'checked' : ''}> Hebrew first</label>
-      </div>`;
+      </div>${CAN_SPEAK ? `<div class="opts voice">
+        <label>Voice <select id="optVoice" aria-label="Voice for hearing words">${voiceOptions()}</select></label>
+        <label><input type="checkbox" id="optSlow" ${prefs.slow ? 'checked' : ''}> Speak slowly</label>
+      </div>` : ''}`;
     if (!d.list.length || d.i >= d.list.length) {
       const allKnown = !d.list.length;
       pane.innerHTML = `<div class="deck"><div class="endbox">
@@ -263,6 +280,10 @@
   function wireOpts(pane, keys, id) {
     const on = (sel, key) => { const el = $(sel, pane); if (el) el.onchange = () => { prefs[key] = el.checked; savePrefs(); buildDeck(keys, id); renderDeck(pane, keys, id); }; };
     on('#optOnly', 'onlyLearning'); on('#optShuffle', 'shuffle'); on('#optRev', 'reverse');
+    // Voice settings don't reshuffle the deck; they play a sample so the choice can be heard right away.
+    const sample = () => speak(deck && deck.list[deck.i] && WORDS[deck.list[deck.i]] ? WORDS[deck.list[deck.i]].w : 'vocabulary');
+    const vs = $('#optVoice', pane); if (vs) vs.onchange = () => { prefs.voice = vs.value; savePrefs(); sample(); };
+    const sl = $('#optSlow', pane); if (sl) sl.onchange = () => { prefs.slow = sl.checked; savePrefs(); sample(); };
   }
   document.addEventListener('keydown', e => {
     if (!deck || !$('#card') || /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
