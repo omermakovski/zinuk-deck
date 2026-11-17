@@ -16,13 +16,21 @@
 
   // ---------- state & persistence ----------
   const LS = 'zinuk-deck-v1';
-  let state = { s: {}, ex: {}, t: 0 };
+  let state = { s: {}, ex: {}, am: { runs: {}, cur: null }, lv: 1, t: 0 };
   try { const raw = localStorage.getItem(LS); if (raw) state = Object.assign(state, JSON.parse(raw)); } catch (e) { }
   // Move progress saved under old position-based keys (word, word~2) to the permanent card ids.
   const LEGACY = {};
   V.groups.forEach(g => g.words.forEach(w => { if (w.legacy) LEGACY[w.legacy] = w.k; }));
+  // Layout 2 regrouped groups 9+ into 25-card groups: their old exercise scores no longer match, so drop them.
+  const LAYOUT = V.layout || 1;
   function migrate(st) {
     let changed = false;
+    if (!st.am || typeof st.am !== 'object') { st.am = { runs: {}, cur: null }; changed = true; }
+    if (!st.am.runs) { st.am.runs = {}; changed = true; }
+    if ((st.lv || 1) < LAYOUT) {
+      Object.keys(st.ex || {}).forEach(id => { if (+id >= 9) delete st.ex[id]; });
+      st.lv = LAYOUT; changed = true;
+    }
     Object.keys(LEGACY).forEach(old => {
       if (old in st.s && !WORDS[old]) {
         const nk = LEGACY[old];
@@ -45,7 +53,7 @@
   async function pushRemote() {
     if (saving) { pending = true; return; }
     saving = true;
-    try { await docRef.set({ s: state.s, ex: state.ex, t: state.t }); syncEl.textContent = 'Synced to your account'; }
+    try { await docRef.set({ s: state.s, ex: state.ex, am: state.am, lv: state.lv, t: state.t }); syncEl.textContent = 'Synced to your account'; }
     catch (e) { syncEl.textContent = 'Saved on this device only'; }
     saving = false;
     if (pending) { pending = false; pushRemote(); }
@@ -69,7 +77,7 @@
       clearTimeout(timer);
       if (snap.exists) {
         const r = snap.data();
-        if ((r.t || 0) >= (state.t || 0)) { state = { s: Object.assign({}, r.s || {}), ex: Object.assign({}, r.ex || {}), t: r.t || 0 }; migrate(state); try { localStorage.setItem(LS, JSON.stringify(state)); } catch (e) { } render(); }
+        if ((r.t || 0) >= (state.t || 0)) { state = { s: Object.assign({}, r.s || {}), ex: Object.assign({}, r.ex || {}), am: r.am || state.am, lv: r.lv || 1, t: r.t || 0 }; migrate(state); try { localStorage.setItem(LS, JSON.stringify(state)); } catch (e) { } render(); }
         else pushRemote();
         syncEl.textContent = 'Synced to your account';
       } else if (state.t) { pushRemote(); } else syncEl.textContent = 'Synced to your account';
@@ -96,6 +104,10 @@
     if ((m = h.match(/^g(\d+)$/))) return { name: 'group', id: +m[1] };
     if (h === 'known') return { name: 'known' };
     if (h === 'review') return { name: 'review' };
+    if (h === 'amirnet') return { name: 'amirnet' };
+    if (h === 'amirnet/run') return { name: 'amrun' };
+    if (h === 'amirnet/progress') return { name: 'amprog' };
+    if ((m = h.match(/^amirnet\/(r|d)\/([\w-]+)$/))) return { name: m[1] === 'r' ? 'amres' : 'amdeb', id: m[2] };
     return { name: 'home' };
   }
   window.addEventListener('hashchange', () => { view = parseHash(); tab = 'cards'; deck = null; render(); window.scrollTo(0, 0); });
@@ -103,8 +115,9 @@
   let deck = null; // flashcard session
 
   function render() {
-    hidePop();
-    document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === view.name || (view.name === 'group' && a.dataset.nav === 'home')));
+    hidePop(); amStopTimer();
+    document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === view.name || (view.name === 'group' && a.dataset.nav === 'home') || (/^am/.test(view.name) && a.dataset.nav === 'amirnet')));
+    if (/^am/.test(view.name)) return renderAmirnet();
     if (view.name === 'group') return renderGroup();
     if (view.name === 'known') return renderKnown();
     if (view.name === 'review') return renderReview();
@@ -142,7 +155,7 @@
           <span id="bkMsg" class="muted" style="font-size:13px"></span>
         </div>
       </section>
-      <div class="section-head"><h2>Word groups</h2><span class="muted">Grouped by meaning, 20 cards each</span></div>
+      <div class="section-head"><h2>Word groups</h2><span class="muted">Grouped by meaning · groups 1–8: 20 cards, groups 9–${V.groups.length}: 25 cards</span></div>
       <div class="groups">${V.groups.map(g => {
         const st = groupStats(g); const best = state.ex[g.id];
         return `<a class="gcard${st.k === st.n ? ' done' : ''}" href="#g${g.id}" style="text-decoration:none;color:inherit">
@@ -444,7 +457,7 @@
   // ---------- backup ----------
   document.addEventListener('click', e => {
     if (!e.target.closest('#bkExport')) return;
-    const blob = new Blob([JSON.stringify({ app: 'zinuk-deck', saved: new Date().toISOString(), s: state.s, ex: state.ex, t: state.t })], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ app: 'zinuk-deck', saved: new Date().toISOString(), s: state.s, ex: state.ex, am: state.am, lv: state.lv, t: state.t })], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = 'zinuk-progress-' + new Date().toISOString().slice(0, 10) + '.json';
@@ -457,11 +470,538 @@
     e.target.files[0].text().then(txt => {
       const r = JSON.parse(txt);
       if (!r || r.app !== 'zinuk-deck' || typeof r.s !== 'object') throw new Error('bad');
-      state = { s: r.s || {}, ex: r.ex || {}, t: 0 }; migrate(state);
+      state = { s: r.s || {}, ex: r.ex || {}, am: r.am || { runs: {}, cur: null }, lv: r.lv || 1, t: 0 }; migrate(state);
       persist(); render();
       const m = $('#bkMsg'); if (m) m.textContent = 'Backup loaded.';
     }).catch(() => { if (msg) msg.textContent = 'That file is not a Zinuk Deck backup.'; });
   });
+
+  // ---------- AMIRNET simulations ----------
+  // Same structure as the real test: 6 scored chapters with their own clocks; chapter 1 is medium (tier B) and each
+  // later chapter is chosen easier (A), medium (B) or harder (C) from the ability estimated after the previous chapters.
+  // Score: 3-parameter IRT ability estimate (EAP) mapped to the 50-150 scale. An approximation, not NITE's formula.
+  const AM_CH = [{ type: 'sc', n: 4, min: 4 }, { type: 'sc', n: 4, min: 4 }, { type: 'rc', n: 5, min: 15 },
+    { type: 'rs', n: 3, min: 6 }, { type: 'rs', n: 3, min: 6 }, { type: 'sc', n: 4, min: 4 }];
+  const AM_TYPE = { sc: 'Sentence Completion', rs: 'Restatements', rc: 'Reading Comprehension' };
+  const AM_TYPE_HE = { sc: 'השלמת משפטים', rs: 'ניסוח מחדש', rc: 'הבנת הנקרא' };
+  const AM_INSTR = {
+    sc: 'This section contains sentences with a word or phrase missing. Choose the answer that best completes the sentence.',
+    rs: 'Each question contains a sentence followed by four possible ways of restating it. Choose the answer that best expresses the meaning of the original sentence.',
+    rc: 'Read the passage below and answer the questions that follow. Choose the best answer to each question according to the passage.'
+  };
+  const AM_RS_Q = 'Which of the following best expresses the meaning of the sentence above?';
+  const TIER_HE = { A: 'קל', B: 'בינוני', C: 'קשה' };
+  const AM_B = { A: [-1.7, -0.6], B: [-0.45, 0.55], C: [0.7, 1.9] };
+  const AM_DISC = { sc: 1.3, rs: 1.4, rc: 1.1 };
+  const BANDS = [[50, 69, "טרום בסיסי א'"], [70, 84, "טרום בסיסי ב'"], [85, 99, 'בסיסי'], [100, 119, "מתקדמים א'"], [120, 133, "מתקדמים ב'"], [134, 150, 'פטור']];
+  const KIND_HE = { main: 'רעיון מרכזי', detail: 'פרט מהקטע', inference: 'הסקה', purpose: 'מטרת פסקה/משפט', vocab: 'מילה בהקשר', attitude: 'עמדת הכותב', title: 'כותרת' };
+  const TRAP_HE = {
+    form: 'מילה שנראית או נשמעת דומה', sense: 'משמעות קרובה אבל לא מדויקת', topic: 'מתאימה לנושא, לא להיגיון המשפט',
+    logic: 'מתעלמת ממילת הקישור / הניגוד', collocation: 'לא מתחברת למילים שלידה', opposite: 'הפוכה מהנדרש',
+    scope: 'שינוי בהיקף או בכמות (חלק ↔ כולם)', time: 'שינוי בזמן או בסדר האירועים', reverse: 'היפוך סיבה ותוצאה / מי עשה מה',
+    extra: 'מוסיפה מידע שאין במקור', missing: 'משמיטה תנאי או הסתייגות', degree: 'משנה את עוצמת הטענה או הוודאות',
+    word_match: 'חוזרת על מילים מהמקור אבל אומרת משהו אחר', not_in_text: 'לא כתוב בקטע', extreme: 'גורפת / קיצונית מדי',
+    detail: 'פרט נכון אבל לא מה שנשאל', partial: 'נכונה רק בחלקה', too_far: 'הסקה שהולכת רחוק מהכתוב'
+  };
+  const TRAP_TIP = {
+    form: 'לפני שבוחרים, לקרוא את המילה אות-אות: מילים כמו adopt/adapt, affect/effect מכשילות בדיוק ברגע של לחץ.',
+    sense: 'לבדוק שהמשמעות המדויקת מתאימה – לא רק "בערך". לנסות לתרגם את המשפט לעברית עם כל אחת מהאפשרויות.',
+    topic: 'מילה מאותו עולם תוכן היא מסיח קלאסי. לשאול: מה המשפט צריך לומר כאן לוגית? רק אז לחפש את המילה.',
+    logic: 'לסמן את מילת הקישור (although, despite, since, unless) ולהחליט מראש אם החלק החסר הוא המשך או ניגוד.',
+    collocation: 'לשים לב למילה שלפני/אחרי החסר (מילת יחס, שם עצם) – יש צירופים קבועים שרק מילה אחת מתאימה להם.',
+    opposite: 'לנסח במילים שלך את הכיוון (חיובי/שלילי) לפני שמסתכלים על התשובות.',
+    scope: 'לבדוק מילים כמו some, most, all, only, few – כל שינוי בהיקף פוסל את התשובה.',
+    time: 'לבדוק זמנים וסדר אירועים (before, after, until, no longer) – תשובה ששינתה את הזמן שגויה.',
+    reverse: 'לשאול "מי גרם למה?" במשפט המקורי ולוודא שהתשובה שומרת על אותו כיוון.',
+    extra: 'כל מידע שלא מופיע במשפט המקורי פוסל את התשובה, גם אם הוא הגיוני.',
+    missing: 'לוודא שכל תנאי (if, unless, only when) והסתייגות מהמקור נשמרו.',
+    degree: 'מילים כמו may, likely, certainly, considerably קובעות את עוצמת הטענה – גם הן חייבות להישמר.',
+    word_match: 'תשובה שמעתיקה מילים מהמקור היא לא בהכרח נכונה – להשוות משמעות, לא מילים.',
+    not_in_text: 'לענות רק לפי מה שכתוב בקטע, לא לפי ידע כללי או היגיון אישי.',
+    extreme: 'להיזהר ממילים גורפות (always, never, only, completely) כשהקטע מסויג יותר.',
+    detail: 'לחזור לשאלה: האם שאלו על רעיון מרכזי או על פרט? פרט נכון יכול להיות תשובה שגויה.',
+    partial: 'לבדוק את כל חלקי התשובה – אם חצי ממנה לא נכון, היא נפסלת.',
+    too_far: 'הסקה טובה נשענת ישירות על משפט בקטע. אם צריך כמה "קפיצות" – זו כנראה לא התשובה.'
+  };
+  const REASONS = [
+    ['vocab_unknown', 'לא הכרתי את המילה / מילת המפתח', 'להכניס את המילים לכרטיסיות ולחזור עליהן; במבחן – לפסול לפי מה שכן מכירים.'],
+    ['vocab_partial', 'הכרתי את המילה, אבל לא את המשמעות המדויקת או שהייתה לה משמעות אחרת', 'ללמוד מילים עם משפט דוגמה ולשים לב למשמעויות נוספות (כמו בקבוצות "משמעות נוספת").'],
+    ['similar_word', 'התבלבלתי עם מילה שנראית או נשמעת דומה', 'לבנות רשימת "זוגות מבלבלים" ולתרגל אותם יחד.'],
+    ['sentence', 'לא הבנתי את המשפט / הקטע', 'לפרק משפט ארוך: נושא, פועל, ומה מוסיפות הפסוקיות. לתרגם בראש את החלק העיקרי.'],
+    ['connector', 'פספסתי מילת קישור, ניגוד או שלילה', 'לסמן בעיניים כל although / however / not / unless לפני שקוראים את התשובות.'],
+    ['trap', 'בחרתי תשובה שנראתה נכונה אבל שינתה פרט (היקף, זמן, סיבה)', 'להשוות כל תשובה למקור פרט-פרט ולפסול, במקום לחפש "הכי דומה".'],
+    ['outside', 'עניתי לפי ידע כללי או היגיון ולא לפי הכתוב', 'לחפש בקטע את המשפט שמוכיח את התשובה לפני שבוחרים.'],
+    ['misread_q', 'לא קראתי נכון את השאלה', 'לקרוא את השאלה פעמיים, במיוחד NOT / EXCEPT / according to.'],
+    ['two_left', 'התלבטתי בין שתי תשובות ובחרתי בלא נכונה', 'כשנשארות שתיים – לחפש את הפרט שפוסל אחת מהן, לא את מה שמחזק.'],
+    ['guess', 'ניחשתי', 'ניחוש מושכל: קודם לפסול, ואז לנחש. ובכל מקרה לא להשאיר ריק.'],
+    ['time', 'לחץ זמן / מיהרתי', 'לתרגל עם שעון: כ-דקה לשאלת השלמה, 2 דקות לניסוח מחדש. לא להיתקע על שאלה אחת.'],
+    ['careless', 'ידעתי – ובחרתי בטעות / חוסר ריכוז', 'לפני מעבר לשאלה הבאה – מבט אחד נוסף על התשובה המסומנת.']
+  ];
+  const REASON = Object.fromEntries(REASONS.map(r => [r[0], { he: r[1], tip: r[2] }]));
+
+  let AMD = window.AMIRNET || null, amLoading = null, amTimer = null, amShownAt = 0;
+  function loadAmirnet() {
+    if (AMD) return Promise.resolve(AMD);
+    if (!amLoading) amLoading = new Promise((ok, no) => {
+      const sc = document.createElement('script'); sc.src = 'amirnet.js'; sc.charset = 'utf-8';
+      sc.onload = () => { AMD = window.AMIRNET || null; AMD ? ok(AMD) : no(); };
+      sc.onerror = () => { amLoading = null; no(); };
+      document.head.appendChild(sc);
+    });
+    return amLoading;
+  }
+  function amStopTimer() { if (amTimer) { clearInterval(amTimer); amTimer = null; } }
+  const amForm = id => AMD && AMD.forms.find(f => f.id === id);
+  const amItems = (form, ci, tier) => AM_CH[ci].type === 'rc' ? form.rc[tier].q : form[AM_CH[ci].type][(ci + 1) + tier];
+  const amB = (ci, tier, j, n) => { const [lo, hi] = AM_B[tier]; return AM_CH[ci].type === 'rc' ? (lo + hi) / 2 : lo + (hi - lo) * (n > 1 ? j / (n - 1) : .5); };
+  const amP = (th, a, b) => 0.2 + 0.8 / (1 + Math.exp(-1.7 * a * (th - b)));
+  function amEAP(resp) { // resp: [{a,b,u}]
+    let num = 0, den = 0;
+    for (let th = -4; th <= 4.0001; th += 0.05) {
+      let L = Math.exp(-th * th / 2);
+      resp.forEach(r => { const p = amP(th, r.a, r.b); L *= r.u ? p : 1 - p; });
+      num += th * L; den += L;
+    }
+    return den ? num / den : 0;
+  }
+  function amResp(run, upto) {
+    const out = [];
+    run.ch.forEach((ch, ci) => {
+      if (ci >= upto || !ch) return;
+      const items = amItems(amForm(run.form), ci, ch.tier);
+      items.forEach((it, j) => out.push({ a: AM_DISC[AM_CH[ci].type], b: amB(ci, ch.tier, j, items.length), u: ch.ans[j] === it.a ? 1 : 0 }));
+    });
+    return out;
+  }
+  const amScore = th => Math.max(50, Math.min(150, Math.round(100 + 22 * th)));
+  const amBand = sc => (BANDS.find(b => sc >= b[0] && sc <= b[1]) || BANDS[0])[2];
+  const nextTier = th => th < -0.45 ? 'A' : th > 0.45 ? 'C' : 'B';
+  const fmt = ms => { const s = Math.max(0, Math.ceil(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+  const curRun = () => state.am.cur && state.am.runs[state.am.cur];
+
+  function amOpenChapter(run, ci, tier) {
+    const n = amItems(amForm(run.form), ci, tier).length;
+    run.ch[ci] = { tier, start: Date.now(), end: null, ans: Array(n).fill(null), flag: Array(n).fill(false), qt: Array(n).fill(0), intro: true };
+    run.cur = ci; run.q = 0;
+  }
+  function amStart(formId) {
+    const run = { id: 'r' + Date.now().toString(36), form: formId, started: Date.now(), finished: null, ch: [], cur: 0, q: 0 };
+    amOpenChapter(run, 0, 'B');
+    state.am.runs[run.id] = run; state.am.cur = run.id; persist();
+    location.hash = '#amirnet/run';
+  }
+  function amLogTime(run) {
+    const ch = run.ch[run.cur];
+    if (ch && !ch.intro && amShownAt) { ch.qt[run.q] += Math.round((Date.now() - amShownAt) / 1000); }
+    amShownAt = Date.now();
+  }
+  function amCloseChapter(run) {
+    amLogTime(run);
+    const ch = run.ch[run.cur]; ch.end = Math.min(Date.now(), ch.start + AM_CH[run.cur].min * 60000); delete ch.intro;
+    if (run.cur < AM_CH.length - 1) {
+      const th = amEAP(amResp(run, run.cur + 1));
+      amOpenChapter(run, run.cur + 1, nextTier(th));
+      persist(); return false;
+    }
+    amFinish(run); return true;
+  }
+  function amFinish(run) {
+    const form = amForm(run.form), items = [];
+    run.ch.forEach((ch, ci) => amItems(form, ci, ch.tier).forEach((it, j, arr) => {
+      const pick = ch.ans[j];
+      items.push({ ci, j, type: AM_CH[ci].type, tier: ch.tier, kind: it.k || '', ok: pick === it.a ? 1 : 0, pick, trap: pick == null || pick === it.a ? '' : (it.t[pick] || ''), b: amB(ci, ch.tier, j, arr.length), t: ch.qt[j] });
+    }));
+    const th = amEAP(items.map(r => ({ a: AM_DISC[r.type], b: r.b, u: r.ok })));
+    const score = amScore(th);
+    run.res = { items, th: Math.round(th * 1000) / 1000, score, band: amBand(score), path: run.ch.map(c => c.tier).join('') };
+    run.finished = Date.now(); state.am.cur = null; persist();
+    location.hash = '#amirnet/r/' + run.id;
+  }
+
+  function renderAmirnet() {
+    if (!AMD) {
+      app.innerHTML = '<p class="muted">Loading the AMIRNET simulations…</p>';
+      loadAmirnet().then(render).catch(() => { app.innerHTML = '<div class="empty">The simulations could not be loaded. Check the internet connection and reload.</div>'; });
+      return;
+    }
+    if (view.name === 'amrun') return amRenderRun();
+    if (view.name === 'amres') return amRenderResult();
+    if (view.name === 'amdeb') return amRenderDebrief();
+    if (view.name === 'amprog') return amRenderProgress();
+    amRenderHome();
+  }
+
+  const finishedRuns = () => Object.values(state.am.runs).filter(r => r.finished && r.res).sort((a, b) => a.finished - b.finished);
+
+  function amRenderHome() {
+    const runs = finishedRuns(), cur = curRun();
+    const last = runs[runs.length - 1];
+    const byForm = {};
+    runs.forEach(r => { (byForm[r.form] = byForm[r.form] || []).push(r); });
+    app.innerHTML = `<div class="am" dir="rtl">
+      <section class="summary">
+        <div><div class="eyebrow">AMIRNET · סימולציות</div><h1>מבחני אמירנט לדוגמה</h1>
+        <p class="muted" style="margin:.4em 0 0">${AMD.forms.length} סימולציות מלאות במבנה המבחן האמיתי: 6 פרקים, 23 שאלות, כ-39 דקות. הפרק הראשון בינוני, וכל פרק הבא קל יותר או קשה יותר לפי הביצועים שלך עד אליו – כמו במבחן המותאם (אדפטיבי) של מאל"ו. בסוף מקבלים ציון בסולם 50–150 ורמת סיווג.</p></div>
+        ${cur ? `<div class="am-cur row"><b>יש מבחן בתהליך (סימולציה ${cur.form}, פרק ${cur.cur + 1})</b><span class="spacer"></span><a class="btn primary" href="#amirnet/run">חזרה למבחן</a><button class="btn" id="amAbandon">ביטול המבחן</button></div>` : ''}
+        <div class="stats">
+          <div class="stat"><b>${runs.length}</b>מבחנים שהושלמו</div>
+          <div class="stat"><b>${last ? last.res.score : '–'}</b>ציון אחרון${last ? ' · ' + esc(last.res.band) : ''}</div>
+          <div class="stat"><b>${runs.length ? Math.max(...runs.map(r => r.res.score)) : '–'}</b>הציון הגבוה ביותר</div>
+          <div class="stat"><b>${runs.filter(r => r.db && r.db.done).length}</b>תחקירים שהושלמו</div>
+        </div>
+        <div class="row">${runs.length ? '<a class="btn primary" href="#amirnet/progress">רפלקציה ומגמות</a>' : ''}<button class="btn" id="amInfo">איך המבחן בנוי ואיך מחושב הציון</button></div>
+        <div id="amInfoBox" hidden>${amInfoHtml()}</div>
+      </section>
+      <div class="section-head"><h2>הסימולציות</h2><span class="muted">אפשר לחזור על סימולציה, אבל השאלות יהיו מוכרות</span></div>
+      <div class="groups">${AMD.forms.map(f => {
+        const rs = byForm[f.id] || [], best = rs.length ? rs[rs.length - 1] : null;
+        return `<div class="gcard${best ? ' done' : ''}">
+          <span class="num">סימולציה ${f.id}</span>
+          <h3>${best ? `ציון ${best.res.score} · ${esc(best.res.band)}` : 'עוד לא נעשתה'}</h3>
+          <span class="meta"><span>${rs.length ? rs.length + ' ניסיונות' : '23 שאלות · 39 דק\''}</span>${best ? `<a href="#amirnet/r/${best.id}">תוצאות</a>` : ''}</span>
+          <button class="btn${best ? '' : ' primary'}" data-start="${f.id}" ${cur ? 'disabled title="יש מבחן פתוח"' : ''}>${best ? 'לעשות שוב' : 'להתחיל'}</button>
+        </div>`;
+      }).join('')}</div></div>`;
+    app.querySelectorAll('[data-start]').forEach(b => b.onclick = () => {
+      if (!confirm('המבחן מתחיל מיד והשעון רץ כמו במבחן האמיתי (גם אם יוצאים מהעמוד). להתחיל?')) return;
+      amStart(+b.dataset.start);
+    });
+    const ab = $('#amAbandon'); if (ab) ab.onclick = () => { if (confirm('לבטל את המבחן הפתוח? התשובות שלו יימחקו.')) { delete state.am.runs[state.am.cur]; state.am.cur = null; persist(); render(); } };
+    $('#amInfo').onclick = () => { const b = $('#amInfoBox'); b.hidden = !b.hidden; };
+  }
+  function amInfoHtml() {
+    return `<div class="am-info">
+      <h3>מבנה המבחן (כמו באמירנט)</h3>
+      <table><thead><tr><th>פרק</th><th>סוג</th><th>שאלות</th><th>זמן</th></tr></thead><tbody>
+      ${AM_CH.map((c, i) => `<tr><td>${i + 1}</td><td>${AM_TYPE_HE[c.type]}</td><td>${c.n}</td><td>${c.min} דק'</td></tr>`).join('')}</tbody></table>
+      <ul>
+        <li>לכל פרק שעון משלו. אי אפשר להעביר זמן בין פרקים, ואי אפשר לחזור לפרק שהסתיים.</li>
+        <li>בתוך פרק אפשר לעבור בין השאלות, לשנות תשובות ולסמן שאלה בדגל. כדי לסיים פרק מוקדם צריך לענות על כל השאלות; כשהזמן נגמר עוברים לפרק הבא אוטומטית.</li>
+        <li>שאלה שלא נענתה נחשבת טעות – תמיד עדיף לנחש.</li>
+        <li><b>אדפטיביות:</b> פרק 1 ברמה בינונית. אחרי כל פרק מחושבת הערכת יכולת מכל התשובות עד אז, והפרק הבא מגיע ברמה קלה, בינונית או קשה. קושי גבוה בהמשך הוא סימן טוב.</li>
+        <li><b>ציון:</b> מחושב לפי מודל תורת התגובה לפריט (IRT): כל שאלה נשקלת לפי הקושי שלה, כך ששאלה קשה שנענתה נכון שווה יותר. התוצאה ממופה לסולם 50–150. מאל"ו לא מפרסמים את הנוסחה שלהם, לכן זה קירוב – לא ציון רשמי.</li>
+      </ul>
+      <h3>רמות הסיווג</h3>
+      <table><tbody>${BANDS.map(b => `<tr><td>${b[0]}–${b[1]}</td><td>${b[2]}</td></tr>`).join('')}</tbody></table>
+      <p class="muted">טבלת הסיווג המקובלת באוניברסיטאות (כל מוסד קובע לעצמו – כדאי לבדוק מול המוסד שלך).</p>
+      <h3>מה לא מדומה כאן</h3>
+      <ul><li>פרקי הניסוי (האזנה, מטלת כתיבה, דקדוק בהקשר, יצירת מילה) – כמעט לא משפיעים על הציון האמיתי ולא נכללו.</li>
+      <li>השאלות נכתבו במיוחד בסגנון המבחן ולא נלקחו מהמאגר של מאל"ו, וכיול הקושי שלהן הוא הערכה ולא נתונים סטטיסטיים מנבחנים אמיתיים.</li></ul>
+    </div>`;
+  }
+
+  // ----- taking a test -----
+  function amRenderRun() {
+    const run = curRun();
+    if (!run || !amForm(run.form)) { location.hash = '#amirnet'; return; }
+    const tick = () => {
+      const ch = run.ch[run.cur], left = ch.start + AM_CH[run.cur].min * 60000 - Date.now();
+      if (left <= 0) { if (!amCloseChapter(run)) amRenderRun(); return true; }
+      const t = $('#amClock'); if (t) { t.textContent = fmt(left); t.classList.toggle('low', left < 60000); }
+      return false;
+    };
+    if (tick()) return;
+    const form = amForm(run.form), ci = run.cur, ch = run.ch[ci], def = AM_CH[ci], items = amItems(form, ci, ch.tier);
+    const head = `<div class="am-head"><div><div class="eyebrow">Simulation ${run.form} · Section ${ci + 1} of ${AM_CH.length}</div><h2>${AM_TYPE[def.type]}</h2></div>
+      <span class="spacer"></span><div class="clock" id="amClock" aria-live="off"></div></div>`;
+    if (ch.intro) {
+      app.innerHTML = `<div class="am-test">${head}<div class="am-instr"><p>${AM_INSTR[def.type]}</p>
+        <p class="muted">${def.n} questions · ${def.min} minutes. The clock is already running.</p>
+        <button class="btn primary" id="amGo">Start the section</button></div></div>`;
+      $('#amGo').onclick = () => { delete ch.intro; amShownAt = Date.now(); persist(); amRenderRun(); };
+      tick(); amTimer = setInterval(tick, 1000); return;
+    }
+    const j = run.q, it = items[j];
+    const allDone = ch.ans.every(a => a != null);
+    let stem = '';
+    if (def.type === 'sc') stem = `<div class="am-stem">${esc(it.s).replace('____', '<span class="am-blank">________</span>')}</div>`;
+    else if (def.type === 'rs') stem = `<div class="am-stem am-orig">${esc(it.s)}</div><div class="am-qline">${AM_RS_Q}</div>`;
+    else stem = `<div class="am-stem">${esc(it.q)}</div>`;
+    const passage = def.type === 'rc' ? `<article class="am-passage"><h3>${esc(form.rc[ch.tier].title)}</h3>${form.rc[ch.tier].p.map((p, i) => `<p><span class="pn">(${i + 1})</span> ${esc(p)}</p>`).join('')}</article>` : '';
+    app.innerHTML = `<div class="am-test">${head}
+      <div class="am-nav">${items.map((_, i) => `<button class="${i === j ? 'on ' : ''}${ch.ans[i] != null ? 'ans ' : ''}${ch.flag[i] ? 'flag' : ''}" data-go="${i}" aria-label="Question ${i + 1}">${i + 1}</button>`).join('')}</div>
+      <div class="${passage ? 'am-split' : ''}">${passage}
+      <div class="am-qbox"><div class="eyebrow">Question ${j + 1} of ${items.length}</div>${stem}
+        <div class="am-opts">${it.o.map((o, i) => `<button class="am-opt${ch.ans[j] === i ? ' sel' : ''}" data-pick="${i}"><span class="n">(${i + 1})</span><span>${esc(o)}</span></button>`).join('')}</div>
+        <div class="row am-ctl">
+          <button class="btn" id="amPrev" ${j === 0 ? 'disabled' : ''}>← Previous</button>
+          <button class="btn" id="amNext" ${j === items.length - 1 ? 'disabled' : ''}>Next →</button>
+          <button class="btn${ch.flag[j] ? ' flagged' : ''}" id="amFlag">⚑ ${ch.flag[j] ? 'Flagged' : 'Flag'}</button>
+          <span class="spacer"></span>
+          <button class="btn primary" id="amEnd" ${allDone ? '' : 'disabled title="Answer every question to finish the section early"'}>${ci === AM_CH.length - 1 ? 'Finish the test' : 'End section'}</button>
+        </div></div></div>
+      <p class="muted am-note">You cannot return to this section after it ends. Unanswered questions count as wrong.</p></div>`;
+    const go = i => { amLogTime(run); run.q = i; persist(); amRenderRun(); };
+    app.querySelectorAll('[data-go]').forEach(b => b.onclick = () => go(+b.dataset.go));
+    app.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => { ch.ans[j] = +b.dataset.pick; persist(); amRenderRun(); });
+    $('#amPrev').onclick = () => go(j - 1);
+    $('#amNext').onclick = () => go(j + 1);
+    $('#amFlag').onclick = () => { ch.flag[j] = !ch.flag[j]; persist(); amRenderRun(); };
+    $('#amEnd').onclick = () => {
+      const fl = ch.flag.filter(Boolean).length;
+      if (!confirm((fl ? `${fl} flagged question(s). ` : '') + 'End this section? You will not be able to come back to it.')) return;
+      if (!amCloseChapter(run)) amRenderRun();
+    };
+    tick(); amTimer = setInterval(tick, 1000);
+  }
+  document.addEventListener('keydown', e => {
+    if (view.name !== 'amrun' || /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    const b = $(`[data-pick="${+e.key - 1}"]`); if (/^[1-4]$/.test(e.key) && b) b.click();
+  });
+
+  // ----- result -----
+  function amItemHtml(form, r, it, opts) {
+    opts = opts || {};
+    const tier = r.tier;
+    const stem = r.type === 'sc' ? esc(it.s).replace('____', `<span class="am-blank">${esc(it.o[it.a])}</span>`)
+      : r.type === 'rs' ? `<span class="am-orig">${esc(it.s)}</span>` : esc(it.q);
+    return `<div class="am-rev ${r.ok ? 'ok' : 'no'}">
+      <div class="eyebrow">Section ${r.ci + 1} · ${AM_TYPE[r.type]} · ${TIER_HE[tier]}${r.kind ? ' · ' + KIND_HE[r.kind] : ''}</div>
+      <div class="am-stem" dir="ltr">${stem}</div>
+      <div class="am-opts" dir="ltr">${it.o.map((o, i) => `<div class="am-opt ro${i === it.a ? ' right' : ''}${i === r.pick && !r.ok ? ' wrong' : ''}${opts.retry === i ? ' retry' : ''}"><span class="n">(${i + 1})</span><span>${esc(o)}${it.oh ? ` <span class="he ohe">${esc(it.oh[i])}</span>` : ''}</span></div>`).join('')}</div>
+      ${r.pick == null ? '<div class="am-tag">לא נענתה</div>' : (!r.ok && r.trap ? `<div class="am-tag">המלכודת שבחרת: ${esc(TRAP_HE[r.trap] || r.trap)}</div>` : '')}
+      <div class="am-x">${esc(it.x)}</div>
+      ${it.he ? `<div class="am-he muted">${esc(it.he)}</div>` : ''}
+    </div>`;
+  }
+  const amItemOf = (form, run, r) => amItems(form, r.ci, run.ch[r.ci].tier)[r.j];
+
+  function amRenderResult() {
+    const run = state.am.runs[view.id];
+    if (!run || !run.res) { location.hash = '#amirnet'; return; }
+    const form = amForm(run.form), R = run.res;
+    const byType = t => { const x = R.items.filter(i => i.type === t); return [x.filter(i => i.ok).length, x.length]; };
+    const wrong = R.items.filter(i => !i.ok).length;
+    const pos = (R.score - 50) / 100 * 100;
+    app.innerHTML = `<div class="am" dir="rtl">
+      <a class="back" href="#amirnet">→ כל הסימולציות</a>
+      <section class="summary" style="margin-top:10px">
+        <div><div class="eyebrow">סימולציה ${run.form} · ${new Date(run.finished).toLocaleDateString('he-IL')}</div>
+          <div class="am-score"><b>${R.score}</b><span>${esc(R.band)}</span></div></div>
+        <div class="am-scale" aria-hidden="true">${BANDS.map(b => `<span style="flex:${b[1] - b[0] + 1}">${b[2]}</span>`).join('')}<i style="right:${pos}%"></i></div>
+        <div class="stats">
+          ${['sc', 'rs', 'rc'].map(t => { const [k, n] = byType(t); return `<div class="stat"><b>${k}/${n}</b>${AM_TYPE_HE[t]}</div>`; }).join('')}
+          <div class="stat"><b>${R.items.length - wrong}/${R.items.length}</b>סה"כ נכונות</div>
+        </div>
+        <div><b>מסלול הרמות:</b> <span class="am-path">${run.ch.map((c, i) => `<span class="t${c.tier}" title="פרק ${i + 1}">${i + 1}: ${TIER_HE[c.tier]}</span>`).join('')}</span>
+          <p class="muted" style="margin:.3em 0 0">${amPathText(run)}</p></div>
+        <div class="row">${wrong ? `<a class="btn primary" href="#amirnet/d/${run.id}">${run.db && run.db.done ? 'התחקיר שלך' : `תחקיר טעויות (${wrong})`}</a>` : '<span>אין טעויות – כל הכבוד!</span>'}
+          <a class="btn" href="#amirnet/progress">רפלקציה ומגמות</a></div>
+      </section>
+      <div class="section-head"><h2>כל השאלות</h2><span class="muted">עם התשובה הנכונה, המלכודת שבחרת והסבר</span></div>
+      <div class="am-filter row"><label><input type="checkbox" id="amOnlyWrong" checked> רק טעויות</label></div>
+      <div id="amList"></div></div>`;
+    const draw = () => {
+      const only = $('#amOnlyWrong').checked;
+      let html = '', lastCi = -1;
+      R.items.forEach(r => {
+        if (only && r.ok) return;
+        if (r.ci !== lastCi && r.type === 'rc') {
+          const t = form.rc[run.ch[r.ci].tier];
+          html += `<details class="am-passage-rev"><summary>הקטע: ${esc(t.title)}</summary><div dir="ltr">${t.p.map((p, i) => `<p><span class="pn">(${i + 1})</span> ${esc(p)}</p>`).join('')}</div><p class="muted">${esc(t.he)}</p></details>`;
+        }
+        lastCi = r.ci;
+        html += amItemHtml(form, r, amItemOf(form, run, r));
+      });
+      $('#amList').innerHTML = html || '<div class="empty">אין טעויות להצגה.</div>';
+    };
+    $('#amOnlyWrong').onchange = draw; draw();
+  }
+  function amPathText(run) {
+    const p = run.ch.map(c => c.tier).join('');
+    const up = (p.match(/C/g) || []).length, down = (p.match(/A/g) || []).length;
+    if (up >= 4) return 'רוב המבחן הוצג לך ברמה הקשה – המבחן "חשב" שאת ברמה גבוהה. זה מה שמאפשר להגיע לציונים הגבוהים.';
+    if (down >= 4) return 'רוב הפרקים הוצגו ברמה הקלה, ולכן התקרה של הציון נמוכה יותר. דיוק בפרקים הראשונים הוא המפתח לעלות רמה.';
+    return 'המבחן נע בין הרמות לפי התשובות שלך. כל פרק שנענה טוב מעלה את רמת הפרק הבא – ושאלות קשות שנענו נכון שוות יותר בציון.';
+  }
+
+  // ----- debrief (תחקיר) -----
+  function amRenderDebrief() {
+    const run = state.am.runs[view.id];
+    if (!run || !run.res) { location.hash = '#amirnet'; return; }
+    const form = amForm(run.form);
+    const db = run.db = run.db || { i: 0, items: {} };
+    const mistakes = run.res.items.filter(r => !r.ok);
+    if (!mistakes.length) { location.hash = '#amirnet/r/' + run.id; return; }
+    if (db.done || db.i >= mistakes.length) return amRenderDebriefSummary(run, form, mistakes);
+    const r = mistakes[db.i], it = amItemOf(form, run, r), key = r.ci + '.' + r.j;
+    const d = db.items[key] = db.items[key] || {};
+    const header = `<a class="back" href="#amirnet/r/${run.id}">→ לתוצאות</a>
+      <div class="row" style="margin-top:10px"><div><div class="eyebrow">תחקיר · טעות ${db.i + 1} מתוך ${mistakes.length}</div><h1>למה טעיתי?</h1></div></div>
+      <div class="bar" style="height:6px;margin:10px 0 16px"><span style="width:${db.i / mistakes.length * 100}%"></span></div>`;
+    const passage = r.type === 'rc' ? (() => { const t = form.rc[r.tier]; return `<details class="am-passage-rev"><summary>הקטע: ${esc(t.title)}</summary><div dir="ltr">${t.p.map((p, i) => `<p><span class="pn">(${i + 1})</span> ${esc(p)}</p>`).join('')}</div></details>`; })() : '';
+    if (d.retry == null) {
+      // step 1: try again without the clock — tells a careless/time slip apart from a real gap
+      const stem = r.type === 'sc' ? esc(it.s).replace('____', '<span class="am-blank">________</span>') : r.type === 'rs' ? `<span class="am-orig">${esc(it.s)}</span><div class="am-qline">${AM_RS_Q}</div>` : esc(it.q);
+      app.innerHTML = `<div class="am" dir="rtl">${header}
+        <div class="am-card"><p><b>שלב 1:</b> נסי לענות שוב, הפעם בלי שעון. ${r.pick == null ? 'בזמן המבחן לא ענית על השאלה הזו.' : 'התשובה שבחרת במבחן לא מסומנת כאן.'}</p>
+        ${passage}<div class="am-stem" dir="ltr">${stem}</div>
+        <div class="am-opts" dir="ltr">${it.o.map((o, i) => `<button class="am-opt" data-retry="${i}"><span class="n">(${i + 1})</span><span>${esc(o)}</span></button>`).join('')}</div></div></div>`;
+      app.querySelectorAll('[data-retry]').forEach(b => b.onclick = () => { d.retry = +b.dataset.retry; persist(); amRenderDebrief(); });
+      return;
+    }
+    const retryOk = d.retry === it.a, fast = r.t > 0 && r.t < (r.type === 'sc' ? 15 : r.type === 'rs' ? 25 : 20);
+    // evidence-based suggestions for the reasons list
+    const sug = new Set();
+    if (r.pick == null) sug.add('time');
+    if (retryOk && r.pick != null) { sug.add(fast ? 'time' : 'careless'); }
+    if (!retryOk) { if (r.type === 'sc') sug.add('vocab_unknown'); else sug.add('sentence'); }
+    if (fast) sug.add('time');
+    if (r.trap === 'form') sug.add('similar_word');
+    if (r.trap === 'sense') sug.add('vocab_partial');
+    if (r.trap === 'logic' || r.trap === 'opposite') sug.add('connector');
+    if (['scope', 'time', 'reverse', 'extra', 'missing', 'degree', 'word_match', 'partial', 'extreme'].includes(r.trap)) sug.add('trap');
+    if (['not_in_text', 'too_far'].includes(r.trap)) sug.add('outside');
+    if (r.trap === 'detail') sug.add('misread_q');
+    if (!d.reasons) d.reasons = [...sug];
+    const probes = r.type === 'sc' ? [[it.a, 'התשובה הנכונה']].concat(r.pick != null && r.pick !== it.a ? [[r.pick, 'המילה שבחרת']] : []) : [];
+    d.probe = d.probe || {};
+    const probeHtml = probes.map(([oi, label]) => {
+      const done = d.probe[oi];
+      const choices = d['pc' + oi] = d['pc' + oi] || shuffle([0, 1, 2, 3]);
+      return `<div class="am-probe"><b>${label}: מה פירוש "<span dir="ltr">${esc(it.o[oi])}</span>"?</b>
+        <div class="mc">${choices.map(ci => `<button class="opt${done != null ? (ci === oi ? ' right' : ci === done ? ' wrong' : '') : ''}" data-probe="${oi}" data-c="${ci}" ${done != null ? 'disabled' : ''}><span class="he">${esc(it.oh[ci])}</span></button>`).join('')}</div>
+        ${done != null ? `<div class="muted">${done === oi ? 'ידעת את המילה ✓' : 'כאן יש פער באוצר המילים – כדאי להוסיף אותה לתרגול.'}</div>` : ''}</div>`;
+    }).join('');
+    const deck = amDeckWords(it, r);
+    app.innerHTML = `<div class="am" dir="rtl">${header}
+      ${passage}${amItemHtml(form, r, it, { retry: d.retry })}
+      <div class="am-card">
+        <p><b>בניסיון החוזר:</b> ${retryOk ? (r.pick == null ? 'ענית נכון – כלומר הידע קיים, והבעיה הייתה הזמן.' : 'ענית נכון! כלומר הידע קיים – הטעות במבחן נבעה כנראה מלחץ זמן, ריכוז או מלכודת.') : 'גם עכשיו התשובה לא נכונה – יש כאן פער בהבנה או באוצר מילים, וזה מה שכדאי לחזק.'}
+        ${r.t ? ` <span class="muted">(במבחן הקדשת לשאלה כ-${r.t} שניות${fast ? ' – מהר מאוד' : ''}.)</span>` : ''}</p>
+        ${probeHtml ? `<p><b>שלב 2: בדיקת אוצר מילים</b></p>${probeHtml}` : ''}
+        <p><b>${probeHtml ? 'שלב 3' : 'שלב 2'}: כמה היית בטוחה כשענית?</b></p>
+        <div class="row am-chips">${[['sure', 'בטוחה'], ['half', 'התלבטתי'], ['guess', 'ניחשתי'], ['none', 'לא הספקתי']].map(([v, l]) => `<label><input type="radio" name="conf" value="${v}" ${d.conf === v ? 'checked' : ''}> ${l}</label>`).join('')}</div>
+        <p><b>מה לדעתך הסיבה לטעות?</b> <span class="muted">(סימנתי מראש הצעות לפי מה שקרה – אפשר לשנות)</span></p>
+        <div class="am-reasons">${REASONS.map(([k, l]) => `<label><input type="checkbox" value="${k}" ${d.reasons.includes(k) ? 'checked' : ''}> ${l}${sug.has(k) ? ' <span class="am-sug">הצעה</span>' : ''}</label>`).join('')}</div>
+        ${deck.length ? `<p><b>מילים מהשאלה שנמצאות בכרטיסיות שלך:</b></p><div class="row">${deck.map(k => `<button class="btn am-addw" data-k="${esc(k)}">${esc(WORDS[k].w)} · ${status(k) === 'k' ? 'להחזיר ללמידה' : 'כבר בלמידה ✓'}</button>`).join('')}</div>` : ''}
+        <p><b>מילים שלא הכרת בשאלה</b> <span class="muted">(לא חובה, מופרדות בפסיק)</span></p>
+        <input class="search" id="amWords" dir="ltr" value="${esc(d.words || '')}" placeholder="e.g. tenuous, scrutinize">
+        <div class="row" style="margin-top:14px">${db.i > 0 ? '<button class="btn" id="amBack">הקודמת</button>' : ''}<span class="spacer"></span><button class="btn primary" id="amNextM">${db.i === mistakes.length - 1 ? 'לסיכום התחקיר' : 'לטעות הבאה'}</button></div>
+      </div></div>`;
+    app.querySelectorAll('[data-probe]').forEach(b => b.onclick = () => { d.probe[b.dataset.probe] = +b.dataset.c; if (+b.dataset.c !== +b.dataset.probe && !d.reasons.includes('vocab_unknown') && +b.dataset.probe === it.a) d.reasons.push('vocab_unknown'); saveForm(); persist(); amRenderDebrief(); });
+    app.querySelectorAll('.am-addw').forEach(b => b.onclick = () => { setStatus(b.dataset.k, 'l'); b.textContent = WORDS[b.dataset.k].w + ' · כבר בלמידה ✓'; });
+    function saveForm() {
+      const c = app.querySelector('input[name=conf]:checked'); if (c) d.conf = c.value;
+      d.reasons = [...app.querySelectorAll('.am-reasons input:checked')].map(x => x.value);
+      d.words = ($('#amWords') || {}).value || '';
+    }
+    $('#amNextM').onclick = () => { saveForm(); db.i++; if (db.i >= mistakes.length) db.done = Date.now(); persist(); amRenderDebrief(); window.scrollTo(0, 0); };
+    const bk = $('#amBack'); if (bk) bk.onclick = () => { saveForm(); db.i--; persist(); amRenderDebrief(); window.scrollTo(0, 0); };
+  }
+  // words of the question that exist in the flashcard deck (sentence completion options)
+  function amDeckWords(it, r) {
+    if (r.type !== 'sc') return [];
+    const out = [];
+    it.o.forEach(o => { const k = keyOf(o); Object.keys(WORDS).forEach(x => { if ((x === k || x.startsWith(k + '~')) && WORDS[x].group && !out.includes(x)) out.push(x); }); });
+    return out;
+  }
+  function amRenderDebriefSummary(run, form, mistakes) {
+    const db = run.db, cnt = {}, traps = {};
+    let retryOk = 0, vocabGap = 0;
+    mistakes.forEach(r => {
+      const d = db.items[r.ci + '.' + r.j] || {};
+      (d.reasons || []).forEach(k => cnt[k] = (cnt[k] || 0) + 1);
+      if (r.trap) traps[r.trap] = (traps[r.trap] || 0) + 1;
+      const it = amItemOf(form, run, r);
+      if (d.retry === it.a) retryOk++;
+      if (d.probe && Object.entries(d.probe).some(([oi, c]) => +oi !== c)) vocabGap++;
+    });
+    const top = Object.entries(cnt).sort((a, b) => b[1] - a[1]).slice(0, 4);
+    const topTraps = Object.entries(traps).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    const words = mistakes.map(r => (db.items[r.ci + '.' + r.j] || {}).words || '').join(',').split(',').map(x => x.trim()).filter(Boolean);
+    app.innerHTML = `<div class="am" dir="rtl"><a class="back" href="#amirnet/r/${run.id}">→ לתוצאות</a>
+      <section class="summary" style="margin-top:10px"><div><div class="eyebrow">סיכום התחקיר · סימולציה ${run.form}</div><h1>מה למדנו מ-${mistakes.length} הטעויות</h1></div>
+        <div class="stats">
+          <div class="stat"><b>${retryOk}/${mistakes.length}</b>תוקנו בניסיון חוזר בלי שעון</div>
+          <div class="stat"><b>${vocabGap}</b>טעויות עם פער באוצר מילים</div>
+          <div class="stat"><b>${mistakes.filter(r => r.pick == null).length}</b>שאלות שלא נענו</div>
+        </div>
+        <p>${retryOk >= mistakes.length / 2 ? 'רוב הטעויות תוקנו כשלא היה לחץ זמן – כלומר הידע שלך גבוה מהציון. כדאי לעבוד על קצב, ריכוז וזיהוי מלכודות.' : 'רוב הטעויות נשארו גם בניסיון החוזר – כלומר יש פערי ידע אמיתיים (אוצר מילים / הבנת מבנים). כאן התרגול ישתלם הכי הרבה.'}</p>
+      </section>
+      ${top.length ? `<div class="section-head"><h2>הסיבות העיקריות</h2></div><div class="am-tips">${top.map(([k, n]) => `<div class="am-card"><b>${esc(REASON[k].he)}</b> <span class="muted">· ${n} פעמים</span><p>${esc(REASON[k].tip)}</p></div>`).join('')}</div>` : ''}
+      ${topTraps.length ? `<div class="section-head"><h2>המלכודות שתפסו אותך</h2></div><div class="am-tips">${topTraps.map(([k, n]) => `<div class="am-card"><b>${esc(TRAP_HE[k] || k)}</b> <span class="muted">· ${n} פעמים</span><p>${esc(TRAP_TIP[k] || '')}</p></div>`).join('')}</div>` : ''}
+      ${words.length ? `<div class="section-head"><h2>מילים שסימנת שלא הכרת</h2></div><p dir="ltr" style="text-align:right">${words.map(esc).join(', ')}</p>` : ''}
+      <div class="row" style="margin-top:18px"><button class="btn" id="amRedo">לעבור על התחקיר שוב</button><a class="btn primary" href="#amirnet/progress">רפלקציה ומגמות</a></div></div>`;
+    $('#amRedo').onclick = () => { db.i = 0; delete db.done; persist(); amRenderDebrief(); };
+  }
+
+  // ----- reflection across tests -----
+  function amStats(runs) {
+    // residual = actual - expected (given that test's ability): positive means stronger than your overall level on that kind of question
+    const acc = {};
+    const add = (key, r, th) => { const a = acc[key] = acc[key] || { n: 0, ok: 0, res: 0 }; a.n++; a.ok += r.ok; a.res += r.ok - amP(th, AM_DISC[r.type], r.b); };
+    runs.forEach(run => run.res.items.forEach(r => {
+      add('type:' + r.type, r, run.res.th);
+      if (r.kind) add('kind:' + r.kind, r, run.res.th);
+    }));
+    return acc;
+  }
+  function amRenderProgress() {
+    const runs = finishedRuns();
+    if (!runs.length) { app.innerHTML = '<div class="am" dir="rtl"><a class="back" href="#amirnet">→ כל הסימולציות</a><div class="empty">עוד אין מבחנים שהושלמו. אחרי המבחן הראשון יופיעו כאן מגמות וחוזקות.</div></div>'; return; }
+    const sc = runs.map(r => r.res.score), n = sc.length, last = runs[n - 1];
+    const prev = n > 1 ? sc[n - 2] : null;
+    const avgPrev = n > 1 ? sc.slice(0, -1).reduce((a, b) => a + b, 0) / (n - 1) : null;
+    const k = Math.min(5, n), xs = sc.slice(-k);
+    const slope = k > 1 ? (() => { const mx = (k - 1) / 2, my = xs.reduce((a, b) => a + b, 0) / k; let nu = 0, de = 0; xs.forEach((y, i) => { nu += (i - mx) * (y - my); de += (i - mx) ** 2; }); return nu / de; })() : 0;
+    const trend = k < 3 ? 'צריך לפחות 3 מבחנים כדי לזהות מגמה.' : slope > 1.5 ? `מגמת שיפור: בממוצע +${slope.toFixed(1)} נקודות למבחן ב-${k} המבחנים האחרונים.` : slope < -1.5 ? `מגמת ירידה: בממוצע ${slope.toFixed(1)} נקודות למבחן ב-${k} המבחנים האחרונים. כדאי לבדוק עייפות, קצב, או אם עברת לנושאים חדשים.` : `יציבות: הציונים ב-${k} המבחנים האחרונים נעים סביב ${Math.round(xs.reduce((a, b) => a + b, 0) / k)}.`;
+    const recent = runs.slice(-5), st = amStats(recent), stLast = amStats([last]);
+    const inRecent = recent.length === 1 ? 'במבחן הזה' : `ב-${recent.length} המבחנים האחרונים`;
+    const line = (key, label) => { const a = st[key]; if (!a) return ''; const rr = a.res / a.n; return { label, pct: Math.round(a.ok / a.n * 100), rr, n: a.n }; };
+    const types = ['sc', 'rs', 'rc'].map(t => line('type:' + t, AM_TYPE_HE[t])).filter(Boolean);
+    const kinds = Object.keys(KIND_HE).map(t => line('kind:' + t, KIND_HE[t])).filter(x => x && x.n >= 2);
+    const strong = [...types, ...kinds].filter(x => x.rr > 0.07).sort((a, b) => b.rr - a.rr);
+    const weak = [...types, ...kinds].filter(x => x.rr < -0.07).sort((a, b) => a.rr - b.rr);
+    const traps = {}, reasons = {}; let unanswered = 0, fastWrong = 0;
+    recent.forEach(run => {
+      run.res.items.forEach(r => { if (r.trap) traps[r.trap] = (traps[r.trap] || 0) + 1; if (r.pick == null) unanswered++; if (!r.ok && r.t && r.t < 15) fastWrong++; });
+      if (run.db) Object.values(run.db.items || {}).forEach(d => (d.reasons || []).forEach(x => reasons[x] = (reasons[x] || 0) + 1));
+    });
+    const topTraps = Object.entries(traps).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    const topReasons = Object.entries(reasons).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    const lastTypes = ['sc', 'rs', 'rc'].map(t => { const a = stLast['type:' + t]; return a ? `${AM_TYPE_HE[t]} ${a.ok}/${a.n}` : ''; }).filter(Boolean).join(' · ');
+    const cmp = prev == null ? 'זה המבחן הראשון שלך – הוא נקודת הייחוס למבחנים הבאים.' :
+      `לעומת המבחן הקודם: ${last.res.score - prev >= 0 ? '+' : ''}${last.res.score - prev} נקודות. לעומת הממוצע של המבחנים הקודמים (${Math.round(avgPrev)}): ${last.res.score - avgPrev >= 0 ? '+' : ''}${Math.round(last.res.score - avgPrev)}.`;
+    app.innerHTML = `<div class="am" dir="rtl"><a class="back" href="#amirnet">→ כל הסימולציות</a>
+      <section class="summary" style="margin-top:10px">
+        <div><div class="eyebrow">רפלקציה · ${n === 1 ? 'מבחן אחד' : n + ' מבחנים'}</div><h1>איך המבחן האחרון ביחס לקודמים</h1></div>
+        <div class="am-chart">${amChart(runs)}</div>
+        <ul class="am-bul"><li><b>המבחן האחרון (סימולציה ${last.form}):</b> ${last.res.score} · ${esc(last.res.band)} · ${lastTypes}</li>
+          <li>${cmp}</li><li>${trend}</li>
+          ${unanswered ? `<li>${unanswered} שאלות לא נענו ${inRecent} – תמיד לנחש לפני שהזמן נגמר.</li>` : ''}
+          ${fastWrong >= 3 ? `<li>${fastWrong} טעויות בשאלות שנענו בפחות מ-15 שניות – ייתכן שאת ממהרת מדי.</li>` : ''}</ul>
+      </section>
+      <div class="section-head"><h2>חוזקות וחולשות</h2><span class="muted">${inRecent}, ביחס לרמה הכללית שלך</span></div>
+      <div class="am-tips">
+        <div class="am-card"><b>חזק יותר</b>${strong.length ? `<ul>${strong.slice(0, 4).map(x => `<li>${esc(x.label)} – ${x.pct}% נכונות</li>`).join('')}</ul>` : '<p class="muted">אין עדיין סוג שאלה שבולט לטובה.</p>'}</div>
+        <div class="am-card"><b>פחות חזק</b>${weak.length ? `<ul>${weak.slice(0, 4).map(x => `<li>${esc(x.label)} – ${x.pct}% נכונות</li>`).join('')}</ul>` : '<p class="muted">אין סוג שאלה שבולט לרעה.</p>'}</div>
+      </div>
+      <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>סוג שאלה</th><th>נכונות</th><th>ביחס לרמה שלך</th></tr></thead><tbody>
+        ${[...types, ...kinds].map(x => `<tr><td>${esc(x.label)}</td><td>${x.pct}% (${x.n})</td><td>${amRelBar(x.rr)}</td></tr>`).join('')}</tbody></table></div>
+      ${topTraps.length ? `<div class="section-head"><h2>המלכודות החוזרות</h2></div><div class="am-tips">${topTraps.map(([k, c]) => `<div class="am-card"><b>${esc(TRAP_HE[k] || k)}</b> <span class="muted">· ${c}</span><p>${esc(TRAP_TIP[k] || '')}</p></div>`).join('')}</div>` : ''}
+      ${topReasons.length ? `<div class="section-head"><h2>הסיבות שציינת בתחקירים</h2></div><div class="am-tips">${topReasons.map(([k, c]) => `<div class="am-card"><b>${esc(REASON[k].he)}</b> <span class="muted">· ${c}</span><p>${esc(REASON[k].tip)}</p></div>`).join('')}</div>` : '<p class="muted">אחרי תחקיר טעויות יופיעו כאן גם הסיבות שסימנת.</p>'}
+      <div class="section-head"><h2>כל המבחנים</h2></div>
+      <div class="tablewrap"><table><thead><tr><th>תאריך</th><th>סימולציה</th><th>ציון</th><th>רמה</th><th>מסלול</th><th>תחקיר</th></tr></thead><tbody>
+        ${runs.slice().reverse().map(r => `<tr><td>${new Date(r.finished).toLocaleDateString('he-IL')}</td><td><a href="#amirnet/r/${r.id}">${r.form}</a></td><td><b>${r.res.score}</b></td><td>${esc(r.res.band)}</td><td dir="ltr">${r.res.path}</td><td>${r.db && r.db.done ? '✓' : (r.res.items.some(i => !i.ok) ? `<a href="#amirnet/d/${r.id}">לעשות</a>` : '–')}</td></tr>`).join('')}</tbody></table></div>
+    </div>`;
+  }
+  function amRelBar(rr) {
+    const w = Math.min(50, Math.abs(rr) * 160);
+    return `<span class="am-rel"><i class="${rr >= 0 ? 'pos' : 'neg'}" style="width:${w}%;${rr >= 0 ? 'right:50%' : 'left:50%'}"></i></span>`;
+  }
+  function amChart(runs) {
+    const W = 600, H = 220, pl = 34, pr = 12, pt = 12, pb = 26;
+    const x = i => runs.length === 1 ? (pl + W - pr) / 2 : pl + (W - pl - pr) * i / (runs.length - 1);
+    const y = v => pt + (H - pt - pb) * (1 - (v - 50) / 100);
+    const grid = [50, 70, 85, 100, 120, 134, 150].map(v => `<line x1="${pl}" x2="${W - pr}" y1="${y(v)}" y2="${y(v)}" class="g"/><text x="${pl - 6}" y="${y(v) + 4}" class="ax" text-anchor="end">${v}</text>`).join('');
+    const pts = runs.map((r, i) => `${x(i)},${y(r.res.score)}`).join(' ');
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Scores over time" dir="ltr">
+      <rect x="${pl}" y="${y(150)}" width="${W - pl - pr}" height="${y(134) - y(150)}" class="ex"/>
+      ${grid}<polyline points="${pts}" class="ln"/>
+      ${runs.map((r, i) => `<circle cx="${x(i)}" cy="${y(r.res.score)}" r="4.5" class="pt"><title>סימולציה ${r.form}: ${r.res.score}</title></circle><text x="${x(i)}" y="${y(r.res.score) - 9}" text-anchor="middle" class="lb">${r.res.score}</text>`).join('')}
+      <text x="${W - pr}" y="${y(150) + 13}" text-anchor="end" class="ax">פטור</text></svg>`;
+  }
 
   view = parseHash();
   render();

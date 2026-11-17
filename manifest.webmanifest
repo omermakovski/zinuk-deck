@@ -1,7 +1,7 @@
 {
  "name": "Zinuk Deck",
  "short_name": "Zinuk Deck",
- "description": "Zinuk vocabulary flashcards, exercises and reading texts",
+ "description": "Zinuk vocabulary flashcards, exercises, reading texts and AMIRNET simulations",
  "start_url": "./",
  "scope": "./",
  "display": "standalone",
