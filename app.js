@@ -232,7 +232,7 @@
   function buildDeck(keys, id) {
     let list = prefs.onlyLearning ? keys.filter(k => status(k) !== 'k') : keys.slice();
     if (prefs.shuffle) list = shuffle(list);
-    deck = { id, keys, list, i: 0, flip: false, k: 0, l: 0 };
+    deck = { id, keys, list, i: 0, flip: false, ans: [] };
   }
 
   function renderDeck(pane, keys, id) {
@@ -246,6 +246,8 @@
         <label>Voice <select id="optVoice" aria-label="Voice for hearing words">${voiceOptions()}</select></label>
         <label><input type="checkbox" id="optSlow" ${prefs.slow ? 'checked' : ''}> Speak slowly</label>
       </div>` : ''}`;
+    d.k = d.ans.filter(v => v === 'k').length; d.l = d.ans.filter(v => v === 'l').length;
+    const go = n => { d.i = Math.max(0, Math.min(d.list.length, d.i + n)); d.flip = false; renderDeck(pane, keys, id); };
     if (!d.list.length || d.i >= d.list.length) {
       const allKnown = !d.list.length;
       pane.innerHTML = `<div class="deck"><div class="endbox">
@@ -253,9 +255,10 @@
         ${allKnown ? '<p class="muted">Untick “Only words I\'m still learning” to go through them again.</p>' :
           `<p><span class="pill k">${d.k} know</span> &nbsp; <span class="pill l">${d.l} still learning</span></p>`}
         <div class="row" style="justify-content:center">
-          ${!allKnown ? '<button class="btn primary" id="again">Study again</button>' : ''}
+          ${!allKnown ? '<button class="btn" id="back">‹ Back to last card</button><button class="btn primary" id="again">Study again</button>' : ''}
           ${view.name === 'group' ? '<button class="btn" id="toFill">Go to the exercise →</button>' : ''}
         </div></div>${opts}</div>`;
+      const b = $('#back'); if (b) b.onclick = () => go(-1);
       const a = $('#again'); if (a) a.onclick = () => { buildDeck(keys, id); renderDeck(pane, keys, id); };
       const f = $('#toFill'); if (f) f.onclick = () => { tab = 'fill'; deck = null; renderGroup(); };
       wireOpts(pane, keys, id); return;
@@ -269,7 +272,11 @@
       ${w.other && w.other.length ? `<div class="note">Other meaning: <span class="he">${w.other.map(esc).join(' · ')}</span></div>` : ''}
       ${w.note ? `<div class="note">${esc(w.note)}</div>` : ''}`;
     pane.innerHTML = `<div class="deck">
-      <div class="counter">Card ${d.i + 1} of ${d.list.length} · ${pill(k)}</div>
+      <div class="decknav">
+        <button class="btn nav" id="prev" type="button" ${d.i === 0 ? 'disabled' : ''} aria-label="Previous card" title="Previous card (↑)">‹ Previous</button>
+        <div class="counter">Card ${d.i + 1} of ${d.list.length} · ${pill(k)}</div>
+        <button class="btn nav" id="next" type="button" aria-label="Next card without answering" title="Next card (↓)">Next ›</button>
+      </div>
       <div class="cardwrap">
       <button class="card${d.flip ? ' flip' : ''}" id="card" aria-label="Flip card">
         <div class="inner"><div class="face">${prefs.reverse ? meaning : front}<div class="kbd">Tap to flip</div></div>
@@ -281,13 +288,23 @@
         <button class="btn learn" id="bL">Still learning</button>
         <button class="btn know" id="bK">I know it</button>
       </div>
-      <div class="kbd">Keyboard: Space flips · ← still learning · → I know it${CAN_SPEAK ? ' · S hears the word' : ''}</div>
+      <div class="kbd">Keyboard: Space flips · ← still learning · → I know it · ↑ previous · ↓ next${CAN_SPEAK ? ' · S hears the word' : ''}</div>
       ${opts}</div>`;
-    $('#card').onclick = () => { d.flip = !d.flip; $('#card').classList.toggle('flip', d.flip); };
+    const card = $('#card');
+    card.onclick = () => { if (card._swiped) { card._swiped = false; return; } d.flip = !d.flip; card.classList.toggle('flip', d.flip); };
+    // Swipe the card sideways to move between cards (left = next, right = previous).
+    let sx = null, sy = 0;
+    card.addEventListener('touchstart', ev => { const t = ev.touches[0]; sx = t.clientX; sy = t.clientY; }, { passive: true });
+    card.addEventListener('touchend', ev => {
+      if (sx === null) return; const t = ev.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy; sx = null;
+      if (Math.abs(dx) > 50 && Math.abs(dx) > 1.5 * Math.abs(dy)) { card._swiped = true; setTimeout(() => { card._swiped = false; }, 400); go(dx < 0 ? 1 : -1); }
+    });
+    $('#prev').onclick = () => go(-1);
+    $('#next').onclick = () => go(1);
     const say = $('#say'); if (say) say.onclick = ev => { ev.stopPropagation(); speak(w.w); };
     $('#bK').onclick = () => answer('k');
     $('#bL').onclick = () => answer('l');
-    function answer(v) { setStatus(k, v); d[v]++; d.i++; d.flip = false; renderDeck(pane, keys, id); }
+    function answer(v) { setStatus(k, v); d.ans[d.i] = v; d.i++; d.flip = false; renderDeck(pane, keys, id); }
     wireOpts(pane, keys, id);
   }
   function wireOpts(pane, keys, id) {
@@ -299,10 +316,13 @@
     const sl = $('#optSlow', pane); if (sl) sl.onchange = () => { prefs.slow = sl.checked; savePrefs(); sample(); };
   }
   document.addEventListener('keydown', e => {
+    if (deck && !$('#card') && e.key === 'ArrowUp' && $('#back') && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); $('#back').click(); return; }
     if (!deck || !$('#card') || /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
     if (e.key === ' ') { e.preventDefault(); $('#card').click(); }
     else if (e.key === 'ArrowRight') $('#bK').click();
     else if (e.key === 'ArrowLeft') $('#bL').click();
+    else if (e.key === 'ArrowUp') { e.preventDefault(); if (!$('#prev').disabled) $('#prev').click(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); $('#next').click(); }
     else if ((e.key === 's' || e.key === 'S') && $('#say')) $('#say').click();
   });
 
