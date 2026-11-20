@@ -179,6 +179,27 @@ td.he{text-align:right}
 .search{font:inherit;border:1px solid var(--line);background:var(--paper);color:var(--ink);border-radius:10px;padding:8px 12px;width:min(320px,100%)}
 .empty{padding:28px;text-align:center;color:var(--muted)}
 
+/* associations */
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}
+.chip{border:1px solid var(--line);background:var(--paper);border-radius:99px;padding:5px 12px;font-size:13.5px;font-weight:500;color:var(--muted)}
+.chip span{font-variant-numeric:tabular-nums;opacity:.75}
+.chip.on{background:var(--pen-soft);border-color:var(--pen);color:var(--ink)}
+.as-cell{margin-top:4px}
+.as-btn{border:0;background:none;padding:2px 0;font-size:13px;text-align:right;display:inline-flex;gap:5px;align-items:baseline;direction:rtl}
+.as-btn.add{color:var(--pen);opacity:.75}
+.as-btn.add:hover{opacity:1;text-decoration:underline}
+.as-btn.has{color:var(--ink);background:color-mix(in srgb,var(--marker) 35%,transparent);border-radius:6px;padding:2px 8px;max-width:22em}
+.as-btn.has .he{white-space:normal}
+.as-edit{display:grid;gap:6px;min-width:14em}
+.as-edit textarea{font:inherit;font-family:var(--f-he);font-size:14px;border:1px solid var(--pen);background:var(--paper);color:var(--ink);border-radius:8px;padding:6px 8px;resize:vertical;width:100%}
+.as-edit .row{gap:6px;justify-content:flex-end}
+.btn.sm{padding:4px 10px;font-size:13px;border-radius:8px}
+.btn.danger{color:var(--bad)}
+.face .as-mark{display:inline-flex;gap:6px;align-items:baseline;direction:rtl;font-size:13px;border:1px dashed var(--line);background:color-mix(in srgb,var(--marker) 22%,var(--paper));color:var(--ink);border-radius:99px;padding:3px 12px;cursor:pointer;max-width:46ch}
+.face .as-mark:hover{border-color:var(--pen)}
+.face .as-mark .as-hint{font-family:var(--f-ui);color:var(--muted);direction:ltr}
+.face .as-mark.open{border-style:solid;border-radius:12px;padding:6px 14px;font-size:15px;background:color-mix(in srgb,var(--marker) 40%,var(--paper))}
+
 /* AMIRNET simulations */
 .am{display:grid;gap:4px}
 .am .summary{text-align:right}

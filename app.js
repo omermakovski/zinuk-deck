@@ -16,7 +16,7 @@
 
   // ---------- state & persistence ----------
   const LS = 'zinuk-deck-v1';
-  let state = { s: {}, ex: {}, am: { runs: {}, cur: null }, lv: 1, t: 0 };
+  let state = { s: {}, ex: {}, am: { runs: {}, cur: null }, as: {}, lv: 1, t: 0 };
   try { const raw = localStorage.getItem(LS); if (raw) state = Object.assign(state, JSON.parse(raw)); } catch (e) { }
   // Move progress saved under old position-based keys (word, word~2) to the permanent card ids.
   const LEGACY = {};
@@ -27,6 +27,7 @@
     let changed = false;
     if (!st.am || typeof st.am !== 'object') { st.am = { runs: {}, cur: null }; changed = true; }
     if (!st.am.runs) { st.am.runs = {}; changed = true; }
+    if (!st.as || typeof st.as !== 'object') { st.as = {}; changed = true; }
     if ((st.lv || 1) < LAYOUT) {
       Object.keys(st.ex || {}).forEach(id => { if (+id >= 9) delete st.ex[id]; });
       st.lv = LAYOUT; changed = true;
@@ -53,10 +54,17 @@
   async function pushRemote() {
     if (saving) { pending = true; return; }
     saving = true;
-    try { await docRef.set({ s: state.s, ex: state.ex, am: state.am, lv: state.lv, t: state.t }); syncEl.textContent = 'Synced to your account'; }
+    try { await docRef.set({ s: state.s, ex: state.ex, am: state.am, as: state.as, lv: state.lv, t: state.t }); syncEl.textContent = 'Synced to your account'; }
     catch (e) { syncEl.textContent = 'Saved on this device only'; }
     saving = false;
     if (pending) { pending = false; pushRemote(); }
+  }
+  // Hebrew memory hook the learner writes for a card, keyed by card id.
+  const assoc = k => (state.as && state.as[k]) || '';
+  function setAssoc(k, v) {
+    v = String(v || '').trim();
+    if (v) state.as[k] = v; else delete state.as[k];
+    persist();
   }
   function setStatus(k, v) {
     if (v === ((WORDS[k] && WORDS[k].origin) || 'l')) delete state.s[k]; else state.s[k] = v;
@@ -77,7 +85,7 @@
       clearTimeout(timer);
       if (snap.exists) {
         const r = snap.data();
-        if ((r.t || 0) >= (state.t || 0)) { state = { s: Object.assign({}, r.s || {}), ex: Object.assign({}, r.ex || {}), am: r.am || state.am, lv: r.lv || 1, t: r.t || 0 }; migrate(state); try { localStorage.setItem(LS, JSON.stringify(state)); } catch (e) { } render(); }
+        if ((r.t || 0) >= (state.t || 0)) { state = { s: Object.assign({}, r.s || {}), ex: Object.assign({}, r.ex || {}), am: r.am || state.am, as: Object.assign({}, r.as || {}), lv: r.lv || 1, t: r.t || 0 }; migrate(state); try { localStorage.setItem(LS, JSON.stringify(state)); } catch (e) { } render(); }
         else pushRemote();
         syncEl.textContent = 'Synced to your account';
       } else if (state.t) { pushRemote(); } else syncEl.textContent = 'Synced to your account';
@@ -247,7 +255,7 @@
         <label><input type="checkbox" id="optSlow" ${prefs.slow ? 'checked' : ''}> Speak slowly</label>
       </div>` : ''}`;
     d.k = d.ans.filter(v => v === 'k').length; d.l = d.ans.filter(v => v === 'l').length;
-    const go = n => { d.i = Math.max(0, Math.min(d.list.length, d.i + n)); d.flip = false; renderDeck(pane, keys, id); };
+    const go = n => { d.i = Math.max(0, Math.min(d.list.length, d.i + n)); d.flip = false; d.showAs = false; renderDeck(pane, keys, id); };
     if (!d.list.length || d.i >= d.list.length) {
       const allKnown = !d.list.length;
       pane.innerHTML = `<div class="deck"><div class="endbox">
@@ -266,7 +274,9 @@
     const k = d.list[d.i], w = WORDS[k];
     const front = `<div class="word">${esc(w.w)}</div><div class="kbd">${(w.units || []).map(esc).join(' · ')}</div>`;
     const meaning = `<div class="mean">${esc(w.he)}</div>`;
-    const back = `${prefs.reverse ? `<div class="word" style="font-size:clamp(26px,6vw,38px)">${esc(w.w)}</div>` : meaning}
+    const a = assoc(k);
+    const assocMark = a ? `<span class="as-mark${d.showAs ? ' open' : ''}" id="asMark" role="button" tabindex="0" aria-expanded="${!!d.showAs}" title="My association (A)"><span aria-hidden="true">💡</span>${d.showAs ? `<span class="he">${esc(a)}</span>` : '<span class="as-hint">association</span>'}</span>` : '';
+    const back = `${prefs.reverse ? `<div class="word" style="font-size:clamp(26px,6vw,38px)">${esc(w.w)}</div>` : meaning}${assocMark}
       ${w.dEn ? `<div class="daily"><div class="den">${hl(w.dEn, w.w)}</div><div class="dhe he">${esc(w.dHe)}</div></div>` : ''}
       ${w.ex ? `<div class="ex">${esc(w.ex)}</div>` : ''}${w.exHe ? `<div class="exhe he">${esc(w.exHe)}</div>` : ''}
       ${w.other && w.other.length ? `<div class="note">Other meaning: <span class="he">${w.other.map(esc).join(' · ')}</span></div>` : ''}
@@ -274,7 +284,7 @@
     pane.innerHTML = `<div class="deck">
       <div class="decknav">
         <button class="btn nav" id="prev" type="button" ${d.i === 0 ? 'disabled' : ''} aria-label="Previous card" title="Previous card (↑)">‹ Previous</button>
-        <div class="counter">Card ${d.i + 1} of ${d.list.length} · ${pill(k)}</div>
+        <div class="counter">Card ${d.i + 1} of ${d.list.length} · ${pill(k)}${a ? ' <span title="This word has your association">💡</span>' : ''}</div>
         <button class="btn nav" id="next" type="button" aria-label="Next card without answering" title="Next card (↓)">Next ›</button>
       </div>
       <div class="cardwrap">
@@ -288,7 +298,7 @@
         <button class="btn learn" id="bL">Still learning</button>
         <button class="btn know" id="bK">I know it</button>
       </div>
-      <div class="kbd">Keyboard: Space flips · ← still learning · → I know it · ↑ previous · ↓ next${CAN_SPEAK ? ' · S hears the word' : ''}</div>
+      <div class="kbd">Keyboard: Space flips · ← still learning · → I know it · ↑ previous · ↓ next${CAN_SPEAK ? ' · S hears the word' : ''}${a ? ' · A shows your association' : ''}</div>
       ${opts}</div>`;
     const card = $('#card');
     card.onclick = () => { if (card._swiped) { card._swiped = false; return; } d.flip = !d.flip; card.classList.toggle('flip', d.flip); };
@@ -302,9 +312,12 @@
     $('#prev').onclick = () => go(-1);
     $('#next').onclick = () => go(1);
     const say = $('#say'); if (say) say.onclick = ev => { ev.stopPropagation(); speak(w.w); };
+    const am = $('#asMark');
+    if (am) { const tog = ev => { ev.stopPropagation(); ev.preventDefault(); d.showAs = !d.showAs; am.classList.toggle('open', d.showAs); am.setAttribute('aria-expanded', d.showAs); am.lastElementChild.outerHTML = d.showAs ? `<span class="he">${esc(a)}</span>` : '<span class="as-hint">association</span>'; };
+      am.onclick = tog; am.onkeydown = ev => { if (ev.key === 'Enter' || ev.key === ' ') tog(ev); }; }
     $('#bK').onclick = () => answer('k');
     $('#bL').onclick = () => answer('l');
-    function answer(v) { setStatus(k, v); d.ans[d.i] = v; d.i++; d.flip = false; renderDeck(pane, keys, id); }
+    function answer(v) { setStatus(k, v); d.ans[d.i] = v; d.i++; d.flip = false; d.showAs = false; renderDeck(pane, keys, id); }
     wireOpts(pane, keys, id);
   }
   function wireOpts(pane, keys, id) {
@@ -324,6 +337,7 @@
     else if (e.key === 'ArrowUp') { e.preventDefault(); if (!$('#prev').disabled) $('#prev').click(); }
     else if (e.key === 'ArrowDown') { e.preventDefault(); $('#next').click(); }
     else if ((e.key === 's' || e.key === 'S') && $('#say')) $('#say').click();
+    else if ((e.key === 'a' || e.key === 'A') && $('#asMark')) { if (!$('#card').classList.contains('flip')) $('#card').click(); $('#asMark').click(); }
   });
 
   // ---------- fill in ----------
@@ -418,7 +432,7 @@
   function showPop(m) {
     const k = m.dataset.k, w = WORDS[k];
     if (!w) { pop.innerHTML = `<div class="w">${esc(m.textContent)}</div>`; }
-    else pop.innerHTML = `<div class="w">${esc(w.w)} ${pill(k)}</div><div class="m">${esc(w.he)}</div>${w.other && w.other.length ? `<div class="m" style="font-size:13px;opacity:.75">גם: ${w.other.map(esc).join(' · ')}</div>` : ''}
+    else pop.innerHTML = `<div class="w">${esc(w.w)} ${pill(k)}</div><div class="m">${esc(w.he)}</div>${w.other && w.other.length ? `<div class="m" style="font-size:13px;opacity:.75">גם: ${w.other.map(esc).join(' · ')}</div>` : ''}${assoc(k) ? `<div class="m" style="font-size:14px">💡 ${esc(assoc(k))}</div>` : ''}
       <button id="popT">${status(k) === 'k' ? 'Move back to learning' : 'I know it'}</button>`;
     pop.hidden = false;
     const r = m.getBoundingClientRect(), pw = pop.offsetWidth, ph = pop.offsetHeight;
@@ -437,11 +451,38 @@
   window.addEventListener('scroll', hidePop, { passive: true });
 
   // ---------- word list ----------
-  function renderList(pane, keys) {
-    pane.innerHTML = `<div class="tablewrap"><table><thead><tr><th>Word</th><th style="text-align:right">Meaning</th><th>Everyday sentence</th><th>Status</th></tr></thead><tbody>
-      ${keys.map(k => { const w = WORDS[k]; return `<tr><td class="w">${esc(w.w)}</td><td class="he">${esc(w.he)}</td><td class="sent">${w.dEn ? `<div>${hl(w.dEn, w.w)}</div><div class="he muted">${esc(w.dHe)}</div>` : ''}</td><td><button class="toggle" data-k="${esc(k)}" title="Click to change">${pill(k)}</button></td></tr>`; }).join('')}
-      </tbody></table></div><p class="muted" style="font-size:13px">Click a status to switch it.</p>`;
-    pane.querySelectorAll('.toggle').forEach(b => b.onclick = () => { const k = b.dataset.k; setStatus(k, status(k) === 'k' ? 'l' : 'k'); b.innerHTML = pill(k); });
+  const LIST_FILTERS = [['all', 'All'], ['l', 'Still learning'], ['k', 'I know'], ['has', 'With association'], ['none', 'No association yet']];
+  const assocView = k => assoc(k)
+    ? `<button class="as-btn has" data-ak="${esc(k)}" title="Edit association"><span class="as-ic" aria-hidden="true">💡</span><span class="he">${esc(assoc(k))}</span></button>`
+    : `<button class="as-btn add" data-ak="${esc(k)}" title="Add a Hebrew association">+ אסוציאציה</button>`;
+  function renderList(pane, keys, opts) {
+    opts = opts || {};
+    const filters = opts.noStatusFilter ? LIST_FILTERS.filter(f => f[0] !== 'l' && f[0] !== 'k') : LIST_FILTERS;
+    let f = prefs.listFilter || 'all';
+    if (!filters.some(x => x[0] === f)) f = 'all';
+    const match = k => f === 'all' ? true : f === 'has' ? !!assoc(k) : f === 'none' ? !assoc(k) : status(k) === f;
+    const list = keys.filter(match);
+    const count = id => keys.filter(k => id === 'all' ? true : id === 'has' ? !!assoc(k) : id === 'none' ? !assoc(k) : status(k) === id).length;
+    pane.innerHTML = `<div class="chips" role="group" aria-label="Filter words">${filters.map(([id, l]) => `<button class="chip${f === id ? ' on' : ''}" data-f="${id}" aria-pressed="${f === id}">${l} <span>${count(id)}</span></button>`).join('')}</div>
+      ${list.length ? `<div class="tablewrap"><table><thead><tr><th>Word</th><th style="text-align:right">Meaning &amp; association</th><th>Everyday sentence</th><th>Status</th></tr></thead><tbody>
+      ${list.map(k => { const w = WORDS[k]; return `<tr><td class="w">${esc(w.w)}</td><td class="he"><div>${esc(w.he)}</div><div class="as-cell">${assocView(k)}</div></td><td class="sent">${w.dEn ? `<div>${hl(w.dEn, w.w)}</div><div class="he muted">${esc(w.dHe)}</div>` : ''}</td><td><button class="toggle" data-k="${esc(k)}" title="Click to change">${pill(k)}</button></td></tr>`; }).join('')}
+      </tbody></table></div>` : '<div class="empty">No words match this filter.</div>'}
+      <p class="muted" style="font-size:13px">Click a status to switch it. Add an association – a Hebrew word, picture or story that helps you remember – and it shows as 💡 on the flashcard.</p>`;
+    pane.querySelectorAll('.chip').forEach(b => b.onclick = () => { prefs.listFilter = b.dataset.f; savePrefs(); renderList(pane, keys, opts); });
+    const recount = () => pane.querySelectorAll('.chip').forEach(c => { c.lastElementChild.textContent = count(c.dataset.f); });
+    pane.querySelectorAll('.toggle').forEach(b => b.onclick = () => { const k = b.dataset.k; setStatus(k, status(k) === 'k' ? 'l' : 'k'); b.innerHTML = pill(k); recount(); });
+    const wireAssoc = cell => { const b = cell.querySelector('.as-btn'); if (b) b.onclick = () => editAssoc(cell, b.dataset.ak); };
+    function editAssoc(cell, k) {
+      cell.innerHTML = `<div class="as-edit"><textarea class="he" dir="rtl" rows="2" maxlength="300" placeholder="מה עוזר לי לזכור את ${esc(WORDS[k].w)}?" aria-label="Association for ${esc(WORDS[k].w)}">${esc(assoc(k))}</textarea>
+        <div class="row"><button class="btn primary sm" data-act="save">Save</button><button class="btn sm" data-act="cancel">Cancel</button>${assoc(k) ? '<button class="btn sm danger" data-act="del">Delete</button>' : ''}</div></div>`;
+      const ta = cell.querySelector('textarea'); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+      const done = v => { if (v !== undefined) { setAssoc(k, v); recount(); } cell.innerHTML = assocView(k); wireAssoc(cell); };
+      cell.querySelector('[data-act="save"]').onclick = () => done(ta.value);
+      cell.querySelector('[data-act="cancel"]').onclick = () => done();
+      const d = cell.querySelector('[data-act="del"]'); if (d) d.onclick = () => done('');
+      ta.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); done(ta.value); } else if (e.key === 'Escape') done(); };
+    }
+    pane.querySelectorAll('.as-cell').forEach(wireAssoc);
   }
 
   // ---------- mixed review ----------
@@ -468,7 +509,7 @@
       q = (q || '').trim().toLowerCase();
       const list = q ? keys.filter(k => k.includes(q) || (WORDS[k].he || '').includes(q)) : keys;
       if (!list.length) { pane.innerHTML = '<div class="empty">No known words match.</div>'; return; }
-      renderList(pane, list);
+      renderList(pane, list, { noStatusFilter: true });
     };
     $('#q').oninput = e => draw(e.target.value);
     draw('');
@@ -477,7 +518,7 @@
   // ---------- backup ----------
   document.addEventListener('click', e => {
     if (!e.target.closest('#bkExport')) return;
-    const blob = new Blob([JSON.stringify({ app: 'zinuk-deck', saved: new Date().toISOString(), s: state.s, ex: state.ex, am: state.am, lv: state.lv, t: state.t })], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ app: 'zinuk-deck', saved: new Date().toISOString(), s: state.s, ex: state.ex, am: state.am, as: state.as, lv: state.lv, t: state.t })], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = 'zinuk-progress-' + new Date().toISOString().slice(0, 10) + '.json';
@@ -490,7 +531,7 @@
     e.target.files[0].text().then(txt => {
       const r = JSON.parse(txt);
       if (!r || r.app !== 'zinuk-deck' || typeof r.s !== 'object') throw new Error('bad');
-      state = { s: r.s || {}, ex: r.ex || {}, am: r.am || { runs: {}, cur: null }, lv: r.lv || 1, t: 0 }; migrate(state);
+      state = { s: r.s || {}, ex: r.ex || {}, am: r.am || { runs: {}, cur: null }, as: r.as || {}, lv: r.lv || 1, t: 0 }; migrate(state);
       persist(); render();
       const m = $('#bkMsg'); if (m) m.textContent = 'Backup loaded.';
     }).catch(() => { if (msg) msg.textContent = 'That file is not a Zinuk Deck backup.'; });
