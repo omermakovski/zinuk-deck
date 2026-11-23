@@ -139,7 +139,14 @@
     const pct = TOTAL ? Math.round(known / TOTAL * 100) : 0;
     const moved = V.known.filter(w => status(keyOf(w.w)) === 'l').length;
     const exDone = Object.keys(state.ex).length;
+    const now = new Date();
+    const daysLeft = Math.round((new Date(2026, 11, 21) - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 864e5);
+    const exam = daysLeft > 1 ? `<b>${daysLeft}</b><span>ימים למבחן<small>המבחן ב־21.12</small></span>`
+      : daysLeft === 1 ? `<b>1</b><span>יום אחד למבחן — מחר!<small>המבחן ב־21.12</small></span>`
+      : daysLeft === 0 ? `<b>🎯</b><span>המבחן היום — בהצלחה!<small>המבחן ב־21.12</small></span>`
+      : '';
     app.innerHTML = `
+      ${exam ? `<div class="exam-count${daysLeft <= 7 ? ' soon' : ''}" dir="rtl">${exam}</div>` : ''}
       <section class="summary">
         <div>
           <div class="eyebrow">Zinuk units 1–24 + נפוצות א–ד · from your Quizlet</div>

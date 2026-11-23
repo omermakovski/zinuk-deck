@@ -76,6 +76,11 @@ button{font:inherit;color:inherit;cursor:pointer}
 
 /* dashboard */
 .summary{background:var(--paper);border-radius:16px;padding:22px;box-shadow:var(--shadow);display:grid;gap:16px}
+.exam-count{display:flex;align-items:center;gap:14px;background:var(--pen-soft);border-radius:16px;padding:14px 20px;margin-bottom:14px;font-family:var(--f-he)}
+.exam-count b{font-family:var(--f-display);font-size:44px;font-weight:800;line-height:1;color:var(--pen);font-variant-numeric:tabular-nums}
+.exam-count span{font-size:20px;font-weight:700;display:flex;flex-direction:column}
+.exam-count small{font-size:13px;font-weight:400;color:var(--muted)}
+.exam-count.soon{background:var(--learn-soft)} .exam-count.soon b{color:var(--learn)}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
 .stat b{display:block;font-family:var(--f-display);font-size:30px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1}
 .stat.k b{color:var(--know)} .stat.l b{color:var(--learn)}
