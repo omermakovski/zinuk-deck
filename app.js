@@ -16,7 +16,7 @@
 
   // ---------- state & persistence ----------
   const LS = 'zinuk-deck-v1';
-  let state = { s: {}, ex: {}, am: { runs: {}, cur: null }, as: {}, lv: 1, t: 0 };
+  let state = { s: {}, ex: {}, am: { runs: {}, cur: null }, as: {}, rd: {}, lv: 1, t: 0 };
   try { const raw = localStorage.getItem(LS); if (raw) state = Object.assign(state, JSON.parse(raw)); } catch (e) { }
   // Move progress saved under old position-based keys (word, word~2) to the permanent card ids.
   const LEGACY = {};
@@ -28,6 +28,7 @@
     if (!st.am || typeof st.am !== 'object') { st.am = { runs: {}, cur: null }; changed = true; }
     if (!st.am.runs) { st.am.runs = {}; changed = true; }
     if (!st.as || typeof st.as !== 'object') { st.as = {}; changed = true; }
+    if (!st.rd || typeof st.rd !== 'object') { st.rd = {}; changed = true; }
     if ((st.lv || 1) < LAYOUT) {
       Object.keys(st.ex || {}).forEach(id => { if (+id >= 9) delete st.ex[id]; });
       st.lv = LAYOUT; changed = true;
@@ -54,7 +55,7 @@
   async function pushRemote() {
     if (saving) { pending = true; return; }
     saving = true;
-    try { await docRef.set({ s: state.s, ex: state.ex, am: state.am, as: state.as, lv: state.lv, t: state.t }); syncEl.textContent = 'Synced to your account'; }
+    try { await docRef.set({ s: state.s, ex: state.ex, am: state.am, as: state.as, rd: state.rd, lv: state.lv, t: state.t }); syncEl.textContent = 'Synced to your account'; }
     catch (e) { syncEl.textContent = 'Saved on this device only'; }
     saving = false;
     if (pending) { pending = false; pushRemote(); }
@@ -85,7 +86,7 @@
       clearTimeout(timer);
       if (snap.exists) {
         const r = snap.data();
-        if ((r.t || 0) >= (state.t || 0)) { state = { s: Object.assign({}, r.s || {}), ex: Object.assign({}, r.ex || {}), am: r.am || state.am, as: Object.assign({}, r.as || {}), lv: r.lv || 1, t: r.t || 0 }; migrate(state); try { localStorage.setItem(LS, JSON.stringify(state)); } catch (e) { } render(); }
+        if ((r.t || 0) >= (state.t || 0)) { state = { s: Object.assign({}, r.s || {}), ex: Object.assign({}, r.ex || {}), am: r.am || state.am, as: Object.assign({}, r.as || {}), rd: Object.assign({}, r.rd || {}), lv: r.lv || 1, t: r.t || 0 }; migrate(state); try { localStorage.setItem(LS, JSON.stringify(state)); } catch (e) { } render(); }
         else pushRemote();
         syncEl.textContent = 'Synced to your account';
       } else if (state.t) { pushRemote(); } else syncEl.textContent = 'Synced to your account';
@@ -112,6 +113,8 @@
     if ((m = h.match(/^g(\d+)$/))) return { name: 'group', id: +m[1] };
     if (h === 'known') return { name: 'known' };
     if (h === 'review') return { name: 'review' };
+    if (h === 'read') return { name: 'read' };
+    if ((m = h.match(/^read\/([emh]\d+)$/))) return { name: 'readart', id: m[1] };
     if (h === 'amirnet') return { name: 'amirnet' };
     if (h === 'amirnet/run') return { name: 'amrun' };
     if (h === 'amirnet/progress') return { name: 'amprog' };
@@ -124,8 +127,9 @@
 
   function render() {
     hidePop(); amStopTimer();
-    document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === view.name || (view.name === 'group' && a.dataset.nav === 'home') || (/^am/.test(view.name) && a.dataset.nav === 'amirnet')));
+    document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === view.name || (view.name === 'group' && a.dataset.nav === 'home') || (/^am/.test(view.name) && a.dataset.nav === 'amirnet') || (/^read/.test(view.name) && a.dataset.nav === 'read')));
     if (/^am/.test(view.name)) return renderAmirnet();
+    if (/^read/.test(view.name)) return renderReading();
     if (view.name === 'group') return renderGroup();
     if (view.name === 'known') return renderKnown();
     if (view.name === 'review') return renderReview();
@@ -438,8 +442,9 @@
   const pop = $('#pop');
   function showPop(m) {
     const k = m.dataset.k, w = WORDS[k];
-    if (!w) { pop.innerHTML = `<div class="w">${esc(m.textContent)}</div>`; }
-    else pop.innerHTML = `<div class="w">${esc(w.w)} ${pill(k)}</div><div class="m">${esc(w.he)}</div>${w.other && w.other.length ? `<div class="m" style="font-size:13px;opacity:.75">גם: ${w.other.map(esc).join(' · ')}</div>` : ''}${assoc(k) ? `<div class="m" style="font-size:14px">💡 ${esc(assoc(k))}</div>` : ''}
+    const ctx = m.dataset.he || '';
+    if (!w) { pop.innerHTML = `<div class="w">${esc(m.dataset.lemma || m.textContent)}</div>${ctx ? `<div class="m">${esc(ctx)}</div>` : ''}`; }
+    else pop.innerHTML = `<div class="w">${esc(w.w)} ${pill(k)}</div><div class="m">${esc(w.he)}</div>${ctx && ctx !== w.he ? `<div class="m" style="font-size:14px">בטקסט: ${esc(ctx)}</div>` : ''}${w.other && w.other.length ? `<div class="m" style="font-size:13px;opacity:.75">גם: ${w.other.map(esc).join(' · ')}</div>` : ''}${assoc(k) ? `<div class="m" style="font-size:14px">💡 ${esc(assoc(k))}</div>` : ''}
       <button id="popT">${status(k) === 'k' ? 'Move back to learning' : 'I know it'}</button>`;
     pop.hidden = false;
     const r = m.getBoundingClientRect(), pw = pop.offsetWidth, ph = pop.offsetHeight;
@@ -456,6 +461,119 @@
   function hidePop() { pop.hidden = true; }
   document.addEventListener('click', e => { if (!pop.contains(e.target)) hidePop(); });
   window.addEventListener('scroll', hidePop, { passive: true });
+
+  // ---------- reading library ----------
+  // AMIRNET-length texts at three levels; key words are highlighted, and texts marked as read leave the list.
+  const RD_LV = [['e', 'Easy', 'קל'], ['m', 'Medium', 'בינוני'], ['h', 'Hard', 'קשה']];
+  const RD_TOPICS = { travel: 'נסיעות וטיולים', fitness: 'אימונים', routine: 'שגרה והרגלים', social: 'קשרים חברתיים', love: 'זוגיות', beauty: 'טיפוח וציפורניים', growth: 'התפתחות אישית', business: 'בניית עסק', mind: 'פסיכולוגיה ומדע', world: 'תרבות ועולם' };
+  let RDD = window.READINGS || null, rdLoading = null;
+  function loadReadings() {
+    if (RDD) return Promise.resolve(RDD);
+    if (!rdLoading) rdLoading = new Promise((ok, no) => {
+      const sc = document.createElement('script'); sc.src = 'readings.js'; sc.charset = 'utf-8';
+      sc.onload = () => { RDD = window.READINGS || null; RDD ? ok(RDD) : no(); };
+      sc.onerror = () => { rdLoading = null; no(); };
+      document.head.appendChild(sc);
+    });
+    return rdLoading;
+  }
+  // Reading texts give each key word's dictionary form, so link to a deck card only on that form (prefix matching
+  // would tie threshold to threat). Adverbs in -ly and plural deck entries still link to their card.
+  const DECK_BY = {};
+  Object.values(WORDS).forEach(w => { const n = w.w.toLowerCase().replace(/[-\s]+/g, ' ').trim(); if (!DECK_BY[n]) DECK_BY[n] = w; });
+  function deckWord(lemma) {
+    const l = lemma.toLowerCase().replace(/[-\s]+/g, ' ').trim();
+    const cands = [l, l + 's', l.replace(/s$/, ''), /ily$/.test(l) ? l.slice(0, -3) + 'y' : '', /ly$/.test(l) ? l.slice(0, -2) : ''];
+    for (const c of cands) if (c && DECK_BY[c]) return DECK_BY[c];
+    return null;
+  }
+  const wc = t => t.body.replace(/\*\*/g, '').split(/\s+/).filter(Boolean).length;
+  const isRead = id => !!(state.rd && state.rd[id]);
+  function setRead(id, on) { if (on) state.rd[id] = Date.now(); else delete state.rd[id]; persist(); }
+  function renderReading() {
+    if (!RDD) {
+      app.innerHTML = '<p class="muted">Loading the reading library…</p>';
+      loadReadings().then(render).catch(() => { app.innerHTML = '<div class="empty">The reading library could not be loaded. Check the internet connection and reload.</div>'; });
+      return;
+    }
+    if (view.name === 'readart') return renderArticle();
+    const lv = prefs.rdLv || 'e', topic = prefs.rdTopic || 'all', showRead = !!prefs.rdShowRead;
+    const inLv = RDD.filter(a => a.lvl === lv);
+    const list = inLv.filter(a => (topic === 'all' || a.topic === topic) && (showRead || !isRead(a.id)));
+    const readAll = RDD.filter(a => isRead(a.id)).length;
+    const topics = Object.keys(RD_TOPICS).filter(t => inLv.some(a => a.topic === t));
+    app.innerHTML = `
+      <section class="summary">
+        <div>
+          <div class="eyebrow">Reading library · AMIRNET-length texts</div>
+          <h1>${readAll} of ${RDD.length} texts read</h1>
+          <div class="muted">Highlighted words are worth learning: tap one for its meaning. Words from your deck can be marked “I know it” right there.</div>
+        </div>
+        <div class="bar" role="img" aria-label="${readAll} of ${RDD.length} read"><span style="width:${RDD.length ? readAll / RDD.length * 100 : 0}%"></span></div>
+      </section>
+      <div class="tabs" role="tablist">${RD_LV.map(([k, en, he]) => {
+        const left = RDD.filter(a => a.lvl === k && !isRead(a.id)).length;
+        return `<button role="tab" data-lv="${k}" class="${lv === k ? 'on' : ''}" aria-selected="${lv === k}"><span class="rd-en">${en} · </span><span class="he">${he}</span> <span class="muted" style="font-size:12px">${left}<span class="rd-en"> left</span></span></button>`;
+      }).join('')}</div>
+      <div class="chips">${[['all', 'הכול']].concat(topics.map(t => [t, RD_TOPICS[t]])).map(([k, l]) => {
+        const n = inLv.filter(a => (k === 'all' || a.topic === k) && !isRead(a.id)).length;
+        return `<button class="chip${topic === k ? ' on' : ''}" data-tp="${k}"><bdi>${l}</bdi> <span>${n}</span></button>`;
+      }).join('')}</div>
+      <label class="row muted" style="font-size:14px;gap:6px;margin-bottom:6px;cursor:pointer"><input type="checkbox" id="rdShow"${showRead ? ' checked' : ''}> Show texts I've already read</label>
+      ${list.length ? `<div class="groups rd-list">${list.map(a => `
+        <a class="gcard${isRead(a.id) ? ' done' : ''}" href="#read/${a.id}" style="text-decoration:none;color:inherit">
+          <span class="meta"><span class="he">${RD_TOPICS[a.topic] || ''}</span><span>${wc(a)} words</span></span>
+          <h3>${esc(a.title)}</h3>
+          <span class="preview rd-prev">${esc(a.body.replace(/\*\*/g, '').slice(0, 150))}…</span>
+          ${isRead(a.id) ? '<span class="pill k" style="justify-self:start">✓ Read</span>' : ''}
+        </a>`).join('')}</div>`
+        : `<div class="empty">${inLv.length && inLv.every(a => isRead(a.id)) ? 'You have read every text at this level. 🎉 Try the next level, or tick “Show texts I’ve already read” to reread.' : 'No unread texts here — pick another topic.'}</div>`}`;
+    app.querySelectorAll('[data-lv]').forEach(b => b.onclick = () => { prefs.rdLv = b.dataset.lv; prefs.rdTopic = 'all'; savePrefs(); renderReading(); });
+    app.querySelectorAll('[data-tp]').forEach(b => b.onclick = () => { prefs.rdTopic = b.dataset.tp; savePrefs(); renderReading(); });
+    $('#rdShow').onchange = e => { prefs.rdShowRead = e.target.checked; savePrefs(); renderReading(); };
+  }
+  function renderArticle() {
+    const a = RDD.find(x => x.id === view.id);
+    if (!a) { location.hash = '#read'; return; }
+    const lvName = (RD_LV.find(l => l[0] === a.lvl) || [])[1] || '';
+    const glossGroup = { words: (a.gloss || []).map(g => ({ w: g.w, he: g.he })) };
+    const body = a.body.split(/\n\s*\n/).map(p => '<p>' + esc(p).replace(/\*\*(.+?)\*\*/g, (_, m) => {
+      // Phrase glosses ("pose a threat") may be marked in another form ("poses a threat"): compare word stems.
+      const stems = t => t.toLowerCase().split(/[\s-]+/).filter(x => x.length > 2).map(x => x.slice(0, 5));
+      const g = findWord(m, glossGroup) || glossGroup.words.find(x => stems(m).some(st => stems(x.w).includes(st)));
+      const w = deckWord(g ? g.w : m); const k = w ? w.k : '';
+      return `<mark class="t${k && status(k) === 'k' ? ' k' : ''}" data-k="${esc(k)}" data-lemma="${esc(g ? g.w : m)}" data-he="${esc(g ? g.he : '')}" tabindex="0">${m}</mark>`;
+    }) + '</p>').join('');
+    const next = () => {
+      const same = RDD.filter(x => x.lvl === a.lvl && x.id !== a.id && !isRead(x.id));
+      return same.find(x => RDD.indexOf(x) > RDD.indexOf(a)) || same[0];
+    };
+    const foot = () => {
+      const n = next();
+      return isRead(a.id)
+        ? `<div class="rd-done"><b>✓ Marked as read</b> — it won't show in the library list any more.</div>
+           <div class="row">${n ? `<a class="btn primary" href="#read/${n.id}" style="text-decoration:none">Next ${lvName.toLowerCase()} text →</a>` : ''}<a class="btn" href="#read" style="text-decoration:none">Back to the library</a><span class="spacer"></span><button class="btn sm" id="rdUndo">Mark as unread</button></div>`
+        : `<div class="row"><button class="btn primary" id="rdMark">✓ I've read this</button><a class="btn" href="#read" style="text-decoration:none">Back to the library</a></div>`;
+    };
+    app.innerHTML = `
+      <a class="back" href="#read">← Reading library</a>
+      <article class="article" style="margin-top:12px">
+        <div class="eyebrow">${lvName} · <span class="he">${RD_TOPICS[a.topic] || ''}</span> · ${wc(a)} words</div>
+        <h1>${esc(a.title)}</h1>
+        <div class="body">${body}</div>
+      </article>
+      <section class="summary" id="rdFoot">${foot()}</section>`;
+    const wire = () => {
+      const mk = $('#rdMark'), un = $('#rdUndo');
+      if (mk) mk.onclick = () => { setRead(a.id, true); $('#rdFoot').innerHTML = foot(); wire(); };
+      if (un) un.onclick = () => { setRead(a.id, false); $('#rdFoot').innerHTML = foot(); wire(); };
+    };
+    wire();
+    app.querySelectorAll('mark.t').forEach(m => {
+      const open = ev => { ev.stopPropagation(); showPop(m); };
+      m.onclick = open; m.onkeydown = ev => { if (ev.key === 'Enter') open(ev); };
+    });
+  }
 
   // ---------- word list ----------
   const LIST_FILTERS = [['all', 'All'], ['l', 'Still learning'], ['k', 'I know'], ['has', 'With association'], ['none', 'No association yet']];
@@ -525,7 +643,7 @@
   // ---------- backup ----------
   document.addEventListener('click', e => {
     if (!e.target.closest('#bkExport')) return;
-    const blob = new Blob([JSON.stringify({ app: 'zinuk-deck', saved: new Date().toISOString(), s: state.s, ex: state.ex, am: state.am, as: state.as, lv: state.lv, t: state.t })], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ app: 'zinuk-deck', saved: new Date().toISOString(), s: state.s, ex: state.ex, am: state.am, as: state.as, rd: state.rd, lv: state.lv, t: state.t })], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = 'zinuk-progress-' + new Date().toISOString().slice(0, 10) + '.json';
@@ -538,7 +656,7 @@
     e.target.files[0].text().then(txt => {
       const r = JSON.parse(txt);
       if (!r || r.app !== 'zinuk-deck' || typeof r.s !== 'object') throw new Error('bad');
-      state = { s: r.s || {}, ex: r.ex || {}, am: r.am || { runs: {}, cur: null }, as: r.as || {}, lv: r.lv || 1, t: 0 }; migrate(state);
+      state = { s: r.s || {}, ex: r.ex || {}, am: r.am || { runs: {}, cur: null }, as: r.as || {}, rd: r.rd || {}, lv: r.lv || 1, t: 0 }; migrate(state);
       persist(); render();
       const m = $('#bkMsg'); if (m) m.textContent = 'Backup loaded.';
     }).catch(() => { if (msg) msg.textContent = 'That file is not a Zinuk Deck backup.'; });

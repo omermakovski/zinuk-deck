@@ -205,6 +205,13 @@ td.he{text-align:right}
 .face .as-mark .as-hint{font-family:var(--f-ui);color:var(--muted);direction:ltr}
 .face .as-mark.open{border-style:solid;border-radius:12px;padding:6px 14px;font-size:15px;background:color-mix(in srgb,var(--marker) 40%,var(--paper))}
 
+/* reading library */
+.rd-list{margin-top:8px}
+.rd-list .preview.rd-prev{white-space:normal;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;line-height:1.5}
+.rd-done{color:var(--know)}
+#rdFoot{gap:12px}
+@media (max-width:520px){.rd-en{display:none}}
+
 /* AMIRNET simulations */
 .am{display:grid;gap:4px}
 .am .summary{text-align:right}
@@ -302,6 +309,7 @@ button.am-opt:hover{border-color:var(--pen)}
       <a href="#home" data-nav="home">Groups</a>
       <a href="#review" data-nav="review">Mixed review</a>
       <a href="#known" data-nav="known">Words I know</a>
+      <a href="#read" data-nav="read">Reading</a>
       <a href="#amirnet" data-nav="amirnet">AMIRNET</a>
     </nav>
     <span class="spacer"></span>
